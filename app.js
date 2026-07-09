@@ -1,61 +1,12 @@
-import { firebaseConfig } from "./firebase-config.js";
-
 const appRoot = document.querySelector("#app");
 const printRoot = document.querySelector("#print-root");
+
 const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
 const roleLabels = { planner: "플래너", groom: "신랑", bride: "신부" };
-const localStoreKey = "weddingPlanner.localStore";
-const localSessionKey = "weddingPlanner.localSession";
-const localWeddingId = "local-wedding";
-const localAdminId = "admin";
-
-const firebaseReady = firebaseConfig?.apiKey && !firebaseConfig.apiKey.includes("YOUR_");
-
-let getAuth;
-let onAuthStateChanged;
-let signInWithEmailAndPassword;
-let signOut;
-let initializeFirestore;
-let persistentLocalCache;
-let collection;
-let doc;
-let getDoc;
-let setDoc;
-let updateDoc;
-let deleteDoc;
-let onSnapshot;
-let serverTimestamp;
-let writeBatch;
-let auth = null;
-let db = null;
-
-if (firebaseReady) {
-  const appModule = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js");
-  const authModule = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js");
-  const firestoreModule = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js");
-  const firebaseApp = appModule.initializeApp(firebaseConfig);
-  ({
-    getAuth,
-    onAuthStateChanged,
-    signInWithEmailAndPassword,
-    signOut
-  } = authModule);
-  ({
-    initializeFirestore,
-    persistentLocalCache,
-    collection,
-    doc,
-    getDoc,
-    setDoc,
-    updateDoc,
-    deleteDoc,
-    onSnapshot,
-    serverTimestamp,
-    writeBatch
-  } = firestoreModule);
-  auth = getAuth(firebaseApp);
-  db = initializeFirestore(firebaseApp, { localCache: persistentLocalCache() });
-}
+const storeKey = "weddingPlanner.store";
+const sessionKey = "weddingPlanner.session";
+const weddingId = "wedding";
+const adminId = "admin";
 
 let state = {
   authUser: null,
@@ -65,12 +16,11 @@ let state = {
   dayNotes: new Map(),
   weekNotes: new Map(),
   selectedDate: null,
-  localMode: false,
-  loading: true,
+  loading: false,
   error: ""
 };
 
-let unsubscribers = [];
+let weekTimer;
 
 function escapeHtml(value = "") {
   return String(value)
@@ -93,6 +43,11 @@ function parseDate(key) {
   return new Date(year, month - 1, day);
 }
 
+function displayDate(key) {
+  const date = parseDate(key);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
 function monthKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
@@ -103,126 +58,120 @@ function weekKey(date) {
   return dateKey(start);
 }
 
-function monthLabel(date) {
-  return `${date.getFullYear()}년 ${date.getMonth() + 1}월`;
-}
-
-function displayDate(key) {
-  const date = parseDate(key);
-  return `${date.getMonth() + 1}/${date.getDate()}`;
-}
-
 function defaultWeddingDate() {
   const date = new Date();
   date.setFullYear(date.getFullYear() + 1);
   return dateKey(date);
 }
 
-function createDefaultLocalStore() {
+function defaultStore() {
   return {
     users: {
-      [localAdminId]: {
-        id: localAdminId,
+      [adminId]: {
+        id: adminId,
         loginId: "admin",
         password: "admin",
-        weddingId: localWeddingId,
+        weddingId,
         role: "planner",
-        displayName: "관리자",
-        email: "admin"
+        displayName: "관리자"
       }
     },
     weddings: {
-      [localWeddingId]: {
-        id: localWeddingId,
+      [weddingId]: {
+        id: weddingId,
         groomName: "신랑",
         brideName: "신부",
         weddingDate: defaultWeddingDate(),
         plannerName: "관리자",
-        plannerUid: localAdminId
+        plannerUid: adminId
       }
     },
     members: {
-      [localWeddingId]: {
-        [localAdminId]: {
+      [weddingId]: {
+        [adminId]: {
           role: "planner",
           displayName: "관리자",
-          email: "admin"
+          loginId: "admin"
         }
       }
     },
     dayNotes: {
-      [localWeddingId]: {}
+      [weddingId]: {}
     },
     weekNotes: {
-      [localWeddingId]: {}
+      [weddingId]: {}
     }
   };
 }
 
-function getLocalStore() {
-  const defaults = createDefaultLocalStore();
+function readStore() {
+  const fallback = defaultStore();
   try {
-    const stored = JSON.parse(localStorage.getItem(localStoreKey) || "{}");
+    const saved = JSON.parse(localStorage.getItem(storeKey) || "{}");
     return {
-      ...defaults,
-      ...stored,
-      users: { ...defaults.users, ...(stored.users || {}) },
-      weddings: { ...defaults.weddings, ...(stored.weddings || {}) },
-      members: { ...defaults.members, ...(stored.members || {}) },
-      dayNotes: { ...defaults.dayNotes, ...(stored.dayNotes || {}) },
-      weekNotes: { ...defaults.weekNotes, ...(stored.weekNotes || {}) }
+      ...fallback,
+      ...saved,
+      users: { ...fallback.users, ...(saved.users || {}) },
+      weddings: { ...fallback.weddings, ...(saved.weddings || {}) },
+      members: { ...fallback.members, ...(saved.members || {}) },
+      dayNotes: { ...fallback.dayNotes, ...(saved.dayNotes || {}) },
+      weekNotes: { ...fallback.weekNotes, ...(saved.weekNotes || {}) }
     };
   } catch {
-    return defaults;
+    return fallback;
   }
 }
 
-function saveLocalStore(store) {
-  localStorage.setItem(localStoreKey, JSON.stringify(store));
+function writeStore(store) {
+  localStorage.setItem(storeKey, JSON.stringify(store));
 }
 
-function setLocalState(userId) {
-  const store = getLocalStore();
+function setSession(userId) {
+  const store = readStore();
   const user = store.users[userId];
   if (!user) return false;
-  const weddingId = user.weddingId;
-  state.authUser = { uid: user.id, email: user.email || user.loginId };
+  const currentWeddingId = user.weddingId || weddingId;
+
+  state.authUser = { uid: user.id, loginId: user.loginId };
   state.profile = { ...user };
-  state.wedding = { id: weddingId, ...store.weddings[weddingId] };
-  state.members = Object.entries(store.members[weddingId] || {}).map(([id, member]) => ({ id, ...member }));
-  state.dayNotes = new Map(Object.entries(store.dayNotes[weddingId] || {}).map(([id, note]) => [id, { id, ...note }]));
-  state.weekNotes = new Map(Object.entries(store.weekNotes[weddingId] || {}).map(([id, note]) => [id, { id, ...note }]));
-  state.localMode = true;
+  state.wedding = { id: currentWeddingId, ...store.weddings[currentWeddingId] };
+  state.members = Object.entries(store.members[currentWeddingId] || {}).map(([id, member]) => ({ id, ...member }));
+  state.dayNotes = new Map(Object.entries(store.dayNotes[currentWeddingId] || {}).map(([id, note]) => [id, { id, ...note }]));
+  state.weekNotes = new Map(Object.entries(store.weekNotes[currentWeddingId] || {}).map(([id, note]) => [id, { id, ...note }]));
   state.loading = false;
   state.error = "";
   return true;
 }
 
-function loginLocalUser(loginId, password) {
+function loginUser(loginId, password) {
   const normalizedLogin = String(loginId || "").trim();
-  const store = getLocalStore();
-  const user = Object.values(store.users).find((item) => (
-    item.loginId === normalizedLogin || item.email === normalizedLogin
-  ) && item.password === password);
+  const store = readStore();
+  const user = Object.values(store.users).find((item) => item.loginId === normalizedLogin && item.password === password);
   if (!user) return false;
-  localStorage.setItem(localSessionKey, user.id);
-  setLocalState(user.id);
+  localStorage.setItem(sessionKey, user.id);
+  setSession(user.id);
   render();
   return true;
 }
 
-function logoutLocalUser() {
-  localStorage.removeItem(localSessionKey);
-  state.authUser = null;
-  state.profile = null;
-  state.wedding = null;
-  state.members = [];
-  state.dayNotes = new Map();
-  state.weekNotes = new Map();
-  state.selectedDate = null;
-  state.localMode = false;
-  state.loading = false;
+function logoutUser() {
+  localStorage.removeItem(sessionKey);
+  state = {
+    authUser: null,
+    profile: null,
+    wedding: null,
+    members: [],
+    dayNotes: new Map(),
+    weekNotes: new Map(),
+    selectedDate: null,
+    loading: false,
+    error: ""
+  };
   render();
+}
+
+function plannerMode() {
+  return state.profile?.role === "planner";
 }
 
 function monthsFromToday() {
@@ -253,56 +202,9 @@ function getMonthWeeks(monthDate) {
   return [...new Set(weeks)];
 }
 
-function plannerMode() {
-  return state.profile?.role === "planner";
-}
-
 function showError(message) {
   state.error = message;
   render();
-}
-
-function clearSubscriptions() {
-  unsubscribers.forEach((unsubscribe) => unsubscribe());
-  unsubscribers = [];
-}
-
-async function loadProfile(user) {
-  const profileSnap = await getDoc(doc(db, "users", user.uid));
-  if (!profileSnap.exists()) {
-    state.profile = null;
-    state.wedding = null;
-    state.members = [];
-    state.dayNotes = new Map();
-    state.weekNotes = new Map();
-    state.loading = false;
-    render();
-    return;
-  }
-
-  state.profile = { id: profileSnap.id, ...profileSnap.data() };
-  subscribeWedding(state.profile.weddingId);
-}
-
-function subscribeWedding(weddingId) {
-  clearSubscriptions();
-  unsubscribers.push(onSnapshot(doc(db, "weddings", weddingId), (snap) => {
-    state.wedding = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-    state.loading = false;
-    render();
-  }));
-  unsubscribers.push(onSnapshot(collection(db, "weddings", weddingId, "members"), (snap) => {
-    state.members = snap.docs.map((item) => ({ id: item.id, ...item.data() }));
-    render();
-  }));
-  unsubscribers.push(onSnapshot(collection(db, "weddings", weddingId, "dayNotes"), (snap) => {
-    state.dayNotes = new Map(snap.docs.map((item) => [item.id, { id: item.id, ...item.data() }]));
-    render();
-  }));
-  unsubscribers.push(onSnapshot(collection(db, "weddings", weddingId, "weekNotes"), (snap) => {
-    state.weekNotes = new Map(snap.docs.map((item) => [item.id, { id: item.id, ...item.data() }]));
-    render();
-  }));
 }
 
 function renderLogin() {
@@ -312,39 +214,13 @@ function renderLogin() {
         <div class="brand">
           <div class="eyebrow">Wedding Calendar</div>
           <h1>결혼 준비 일정을 한 장으로 관리</h1>
-          <p class="muted">플래너 계정으로 신랑/신부 계정을 발급하고, 모든 일정은 모바일과 인쇄용 연간표로 확인합니다.</p>
+          <p class="muted">플래너 계정으로 신랑/신부 계정을 발급하고, 모바일 달력과 인쇄용 연간표로 확인합니다.</p>
         </div>
         <p class="muted">최초 관리자 로그인: <strong>admin / admin</strong></p>
-        ${firebaseReady ? "" : `<p class="muted">Firebase 설정 전에는 이 브라우저에 저장되는 로컬 모드로 동작합니다.</p>`}
-        <label>아이디 또는 이메일<input name="email" type="text" autocomplete="username" required /></label>
+        <label>아이디<input name="loginId" type="text" autocomplete="username" required /></label>
         <label>비밀번호<input name="password" type="password" autocomplete="current-password" required /></label>
         ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ""}
         <button type="submit">로그인</button>
-      </form>
-    </section>
-  `;
-}
-
-function renderSetup() {
-  appRoot.innerHTML = `
-    <section class="login">
-      <form class="login-panel" data-action="setup">
-        <div class="brand">
-          <div class="eyebrow">Initial Setup</div>
-          <h1>플래너 초기 설정</h1>
-          <p class="muted">현재 로그인한 계정을 플래너로 등록하고 첫 웨딩 캘린더를 만듭니다.</p>
-        </div>
-        <label>플래너명<input name="plannerName" required placeholder="예: 한인주 실장" /></label>
-        <div class="form-grid two">
-          <label>신랑 이름<input name="groomName" required /></label>
-          <label>신부 이름<input name="brideName" required /></label>
-        </div>
-        <label>예식일<input name="weddingDate" type="date" required /></label>
-        ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ""}
-        <div class="row">
-          <button type="submit">웨딩 생성</button>
-          <button class="secondary" type="button" data-action="logout">로그아웃</button>
-        </div>
       </form>
     </section>
   `;
@@ -405,9 +281,9 @@ function renderPlannerPanel() {
           </label>
           <label>이름<input name="displayName" required /></label>
         </div>
-        <label>${state.localMode ? "로그인 아이디" : "로그인 이메일"}<input name="email" type="${state.localMode ? "text" : "email"}" required /></label>
+        <label>로그인 아이디<input name="loginId" type="text" required /></label>
         <div class="form-grid two">
-          <label>임시 비밀번호<input name="password" minlength="${state.localMode ? "1" : "6"}" value="${generatePassword()}" required /></label>
+          <label>임시 비밀번호<input name="password" minlength="1" value="${generatePassword()}" required /></label>
           <button class="secondary" type="button" data-action="regen-password">비번 새로</button>
         </div>
         <button type="submit">계정 발급</button>
@@ -539,10 +415,6 @@ function render() {
     renderLogin();
     return;
   }
-  if (!state.profile) {
-    renderSetup();
-    return;
-  }
   renderApp();
 }
 
@@ -553,245 +425,109 @@ function generatePassword() {
 async function handleLogin(form) {
   state.error = "";
   const formData = new FormData(form);
-  const loginId = String(formData.get("email") || "").trim();
-  const password = String(formData.get("password") || "");
-  if (loginLocalUser(loginId, password)) return;
-  if (!firebaseReady) {
+  const loginId = formData.get("loginId");
+  const password = formData.get("password");
+  if (!loginUser(loginId, password)) {
     showError("아이디 또는 비밀번호를 확인하세요. 최초 로그인은 admin / admin 입니다.");
-    return;
-  }
-  try {
-    const credential = await signInWithEmailAndPassword(auth, loginId, password);
-    state.loading = true;
-    render();
-    await loadProfile(credential.user);
-  } catch (error) {
-    showError(error.message);
   }
 }
 
-async function handleSetup(form) {
+function handleSaveWedding(form) {
   const data = Object.fromEntries(new FormData(form));
-  if (state.localMode) {
-    const store = getLocalStore();
-    store.weddings[state.profile.weddingId] = {
-      id: state.profile.weddingId,
-      groomName: data.groomName,
-      brideName: data.brideName,
-      weddingDate: data.weddingDate,
-      plannerName: data.plannerName,
-      plannerUid: state.authUser.uid
-    };
-    store.users[state.authUser.uid] = {
-      ...store.users[state.authUser.uid],
-      displayName: data.plannerName
-    };
-    store.members[state.profile.weddingId][state.authUser.uid] = {
-      role: "planner",
-      displayName: data.plannerName,
-      email: state.authUser.email
-    };
-    saveLocalStore(store);
-    setLocalState(state.authUser.uid);
-    render();
-    return;
-  }
-  const weddingId = crypto.randomUUID();
-  const batch = writeBatch(db);
-  batch.set(doc(db, "weddings", weddingId), {
+  const store = readStore();
+  store.weddings[state.profile.weddingId] = {
+    ...store.weddings[state.profile.weddingId],
     groomName: data.groomName,
     brideName: data.brideName,
     weddingDate: data.weddingDate,
-    plannerName: data.plannerName,
-    plannerUid: state.authUser.uid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
-  });
-  batch.set(doc(db, "users", state.authUser.uid), {
-    weddingId,
-    role: "planner",
-    displayName: data.plannerName,
-    email: state.authUser.email,
-    createdAt: serverTimestamp()
-  });
-  batch.set(doc(db, "weddings", weddingId, "members", state.authUser.uid), {
-    role: "planner",
-    displayName: data.plannerName,
-    email: state.authUser.email,
-    createdAt: serverTimestamp()
-  });
-  await batch.commit();
-  await loadProfile(state.authUser);
+    plannerName: data.plannerName
+  };
+  store.users[state.wedding.plannerUid || adminId].displayName = data.plannerName || "관리자";
+  store.members[state.profile.weddingId][state.wedding.plannerUid || adminId].displayName = data.plannerName || "관리자";
+  writeStore(store);
+  setSession(state.authUser.uid);
+  render();
 }
 
-async function handleSaveWedding(form) {
+function handleCreateAccount(form) {
   const data = Object.fromEntries(new FormData(form));
-  if (state.localMode) {
-    const store = getLocalStore();
-    store.weddings[state.profile.weddingId] = {
-      ...store.weddings[state.profile.weddingId],
-      groomName: data.groomName,
-      brideName: data.brideName,
-      weddingDate: data.weddingDate,
-      plannerName: data.plannerName
-    };
-    const planner = store.users[state.wedding.plannerUid || localAdminId];
-    if (planner) planner.displayName = data.plannerName || planner.displayName;
-    saveLocalStore(store);
-    setLocalState(state.authUser.uid);
-    render();
-    return;
-  }
-  await updateDoc(doc(db, "weddings", state.profile.weddingId), {
-    groomName: data.groomName,
-    brideName: data.brideName,
-    weddingDate: data.weddingDate,
-    plannerName: data.plannerName,
-    updatedAt: serverTimestamp()
-  });
-}
+  const loginId = String(data.loginId || "").trim();
+  const store = readStore();
+  const duplicate = Object.values(store.users).some((user) => user.loginId === loginId);
+  if (duplicate) throw new Error("이미 사용 중인 로그인 아이디입니다.");
 
-async function handleCreateAccount(form) {
-  const data = Object.fromEntries(new FormData(form));
-  if (state.localMode) {
-    const loginId = String(data.email || "").trim();
-    const store = getLocalStore();
-    const duplicate = Object.values(store.users).some((user) => user.loginId === loginId || user.email === loginId);
-    if (duplicate) throw new Error("이미 사용 중인 로그인 아이디입니다.");
-    const userId = `local-${crypto.randomUUID()}`;
-    store.users[userId] = {
-      id: userId,
-      loginId,
-      password: data.password,
-      weddingId: state.profile.weddingId,
-      role: data.role,
-      displayName: data.displayName,
-      email: loginId
-    };
-    store.members[state.profile.weddingId] = {
-      ...(store.members[state.profile.weddingId] || {}),
-      [userId]: {
-        role: data.role,
-        displayName: data.displayName,
-        email: loginId
-      }
-    };
-    saveLocalStore(store);
-    setLocalState(state.authUser.uid);
-    alert(`${roleLabels[data.role]} 계정이 발급되었습니다.\n아이디: ${loginId}\n임시 비밀번호: ${data.password}`);
-    form.reset();
-    form.querySelector('[name="password"]').value = generatePassword();
-    render();
-    return;
-  }
-  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: data.email,
-      password: data.password,
-      returnSecureToken: false
-    })
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "계정 발급에 실패했습니다.");
-
-  const batch = writeBatch(db);
-  batch.set(doc(db, "users", payload.localId), {
+  const userId = `user-${crypto.randomUUID()}`;
+  store.users[userId] = {
+    id: userId,
+    loginId,
+    password: data.password,
     weddingId: state.profile.weddingId,
     role: data.role,
-    displayName: data.displayName,
-    email: data.email,
-    createdAt: serverTimestamp()
-  });
-  batch.set(doc(db, "weddings", state.profile.weddingId, "members", payload.localId), {
-    role: data.role,
-    displayName: data.displayName,
-    email: data.email,
-    createdAt: serverTimestamp()
-  });
-  await batch.commit();
-  alert(`${roleLabels[data.role]} 계정이 발급되었습니다.\n이메일: ${data.email}\n임시 비밀번호: ${data.password}`);
+    displayName: data.displayName
+  };
+  store.members[state.profile.weddingId] = {
+    ...(store.members[state.profile.weddingId] || {}),
+    [userId]: {
+      role: data.role,
+      displayName: data.displayName,
+      loginId
+    }
+  };
+  writeStore(store);
+  setSession(state.authUser.uid);
+  alert(`${roleLabels[data.role]} 계정이 발급되었습니다.\n아이디: ${loginId}\n임시 비밀번호: ${data.password}`);
   form.reset();
   form.querySelector('[name="password"]').value = generatePassword();
+  render();
 }
 
-async function handleSaveDay(form) {
+function handleSaveDay(form) {
   const data = Object.fromEntries(new FormData(form));
-  if (state.localMode) {
-    const store = getLocalStore();
-    store.dayNotes[state.profile.weddingId] = {
-      ...(store.dayNotes[state.profile.weddingId] || {}),
-      [state.selectedDate]: {
-        title: data.title,
-        text: data.text,
-        date: state.selectedDate,
-        updatedBy: state.authUser.uid
-      }
-    };
-    saveLocalStore(store);
-    state.selectedDate = null;
-    setLocalState(state.authUser.uid);
-    render();
-    return;
-  }
-  const ref = doc(db, "weddings", state.profile.weddingId, "dayNotes", state.selectedDate);
-  await setDoc(ref, {
-    title: data.title,
-    text: data.text,
-    date: state.selectedDate,
-    updatedAt: serverTimestamp(),
-    updatedBy: state.authUser.uid
-  }, { merge: true });
+  const store = readStore();
+  store.dayNotes[state.profile.weddingId] = {
+    ...(store.dayNotes[state.profile.weddingId] || {}),
+    [state.selectedDate]: {
+      title: data.title,
+      text: data.text,
+      date: state.selectedDate,
+      updatedBy: state.authUser.uid
+    }
+  };
+  writeStore(store);
   state.selectedDate = null;
+  setSession(state.authUser.uid);
   render();
 }
 
-async function handleDeleteDay() {
-  if (state.localMode) {
-    const store = getLocalStore();
-    delete store.dayNotes[state.profile.weddingId]?.[state.selectedDate];
-    saveLocalStore(store);
-    state.selectedDate = null;
-    setLocalState(state.authUser.uid);
-    render();
-    return;
-  }
-  await deleteDoc(doc(db, "weddings", state.profile.weddingId, "dayNotes", state.selectedDate));
+function handleDeleteDay() {
+  const store = readStore();
+  delete store.dayNotes[state.profile.weddingId]?.[state.selectedDate];
+  writeStore(store);
   state.selectedDate = null;
+  setSession(state.authUser.uid);
   render();
 }
 
-let weekTimer;
 function queueWeekSave(textarea) {
   clearTimeout(weekTimer);
-  weekTimer = setTimeout(async () => {
+  weekTimer = setTimeout(() => {
     const key = textarea.dataset.week;
-    if (state.localMode) {
-      const store = getLocalStore();
-      store.weekNotes[state.profile.weddingId] = {
-        ...(store.weekNotes[state.profile.weddingId] || {}),
-        [key]: {
-          text: textarea.value,
-          weekStart: key,
-          updatedBy: state.authUser.uid
-        }
-      };
-      saveLocalStore(store);
-      state.weekNotes.set(key, {
-        id: key,
+    const store = readStore();
+    store.weekNotes[state.profile.weddingId] = {
+      ...(store.weekNotes[state.profile.weddingId] || {}),
+      [key]: {
         text: textarea.value,
         weekStart: key,
         updatedBy: state.authUser.uid
-      });
-      return;
-    }
-    await setDoc(doc(db, "weddings", state.profile.weddingId, "weekNotes", key), {
+      }
+    };
+    writeStore(store);
+    state.weekNotes.set(key, {
+      id: key,
       text: textarea.value,
       weekStart: key,
-      updatedAt: serverTimestamp(),
       updatedBy: state.authUser.uid
-    }, { merge: true });
+    });
   }, 500);
 }
 
@@ -865,14 +601,6 @@ async function downloadPng() {
   image.src = url;
 }
 
-async function handleLogout() {
-  if (state.localMode) {
-    logoutLocalUser();
-    return;
-  }
-  if (auth) await signOut(auth);
-}
-
 document.addEventListener("submit", async (event) => {
   const form = event.target.closest("form");
   if (!form) return;
@@ -880,10 +608,9 @@ document.addEventListener("submit", async (event) => {
   try {
     const action = form.dataset.action;
     if (action === "login") await handleLogin(form);
-    if (action === "setup") await handleSetup(form);
-    if (action === "save-wedding") await handleSaveWedding(form);
-    if (action === "create-account") await handleCreateAccount(form);
-    if (action === "save-day") await handleSaveDay(form);
+    if (action === "save-wedding") handleSaveWedding(form);
+    if (action === "create-account") handleCreateAccount(form);
+    if (action === "save-day") handleSaveDay(form);
   } catch (error) {
     showError(error.message);
   }
@@ -893,9 +620,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
-  if (action === "logout") {
-    await handleLogout();
-  }
+  if (action === "logout") logoutUser();
   if (action === "select-day") {
     state.selectedDate = target.dataset.date;
     render();
@@ -904,9 +629,7 @@ document.addEventListener("click", async (event) => {
     state.selectedDate = null;
     render();
   }
-  if (action === "delete-day") {
-    await handleDeleteDay();
-  }
+  if (action === "delete-day") handleDeleteDay();
   if (action === "regen-password") {
     target.closest("form").querySelector('[name="password"]').value = generatePassword();
   }
@@ -914,9 +637,7 @@ document.addEventListener("click", async (event) => {
     renderPrintSheet();
     window.print();
   }
-  if (action === "png") {
-    await downloadPng();
-  }
+  if (action === "png") await downloadPng();
 });
 
 document.addEventListener("input", (event) => {
@@ -926,28 +647,10 @@ document.addEventListener("input", (event) => {
   }
 });
 
-const localSession = localStorage.getItem(localSessionKey);
-if (localSession && setLocalState(localSession)) {
-  render();
-} else if (!firebaseReady) {
-  if (localSession) localStorage.removeItem(localSessionKey);
-  state.loading = false;
+const savedSession = localStorage.getItem(sessionKey);
+if (savedSession && setSession(savedSession)) {
   render();
 } else {
-  if (localSession) localStorage.removeItem(localSessionKey);
-  onAuthStateChanged(auth, async (user) => {
-    clearSubscriptions();
-    state.authUser = user;
-    state.profile = null;
-    state.wedding = null;
-    state.loading = false;
-    state.error = "";
-    if (user) {
-      state.loading = true;
-      render();
-      await loadProfile(user);
-    } else {
-      render();
-    }
-  });
+  if (savedSession) localStorage.removeItem(sessionKey);
+  render();
 }
