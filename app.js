@@ -29,6 +29,7 @@ function freshState() {
     selectedDate: null,
     selectedVendorId: null,
     selectedVendorPhotoIndex: 0,
+    vendorDetailTab: "overview",
     editingVendorId: null,
     categoryManagerOpen: false,
     presentationVendorId: null,
@@ -73,6 +74,10 @@ function safeUrl(value) {
   } catch {
     return "";
   }
+}
+
+function textLines(value) {
+  return String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
 function dateKey(date) {
@@ -137,6 +142,24 @@ function defaultVendors() {
       instagram: "@atelier_sample",
       website: "",
       contractTerms: "피팅 3벌 · 계약금 30% · 일정 변경은 30일 전 협의",
+      packages: [
+        { name: "본식 스탠다드", price: "280만원", details: "본식 드레스 2벌\n피팅 3벌\n기본 베일·액세서리 포함" },
+        { name: "촬영 + 본식", price: "420만원", details: "촬영 드레스 3벌\n본식 드레스 2벌\n촬영 액세서리 포함" }
+      ],
+      extraFees: [
+        { name: "드레스 추가", price: "1벌 22만원" },
+        { name: "지정비", price: "담당자별 별도" }
+      ],
+      discountBenefits: "촬영과 본식을 함께 계약하면 본식 비용 20만원 할인",
+      promotionPeriod: "상시 협의",
+      updatedAtLabel: "2026-06-04",
+      scheduleInfo: "피팅은 예약제로 운영하며 주말 상담은 조기 마감될 수 있습니다.",
+      reservationPolicy: "계약금 30% 입금 순으로 일정이 확정됩니다.",
+      operationPolicy: "일정 변경과 취소는 계약서 기준으로 처리합니다.",
+      requiredMeeting: true,
+      commissionRate: "15%",
+      commissionTerms: "본식 완료 후 익월 정산 · 추가 판매 항목 제외",
+      sourceMemo: "업체 공지, 통화 내용, 카카오톡 안내를 확인해 최신 정보로 갱신",
       plannerNotes: "샘플 데이터입니다. 편집하거나 삭제해도 됩니다.",
       tags: ["실크", "미니멀", "본식"],
       photoIds: [],
@@ -157,6 +180,21 @@ function defaultVendors() {
       instagram: "@raum_sample",
       website: "",
       contractTerms: "보증 250명 · 계약금 200만원 · 외부 생화 반입 협의",
+      packages: [
+        { name: "토요일 점심", price: "식대 8.9만원 · 대관 650만원", details: "보증 인원 250명\n단독홀 90분\n기본 꽃장식 포함" },
+        { name: "일요일 저녁", price: "식대 8.2만원 · 대관 500만원", details: "보증 인원 200명\n단독홀 90분" }
+      ],
+      extraFees: [{ name: "생화 업그레이드", price: "구성별 별도 견적" }],
+      discountBenefits: "비수기·잔여 타임 프로모션 별도 확인",
+      promotionPeriod: "잔여 타임 한정",
+      updatedAtLabel: "2026-06-04",
+      scheduleInfo: "예식 간격 90분 · 오전/오후 타임별 보증 인원 상이",
+      reservationPolicy: "예약금 200만원 입금 후 확정 · 가예약 불가",
+      operationPolicy: "최소 보증 인원과 식대는 예식 30일 전 최종 확정",
+      requiredMeeting: true,
+      commissionRate: "협의",
+      commissionTerms: "예식 완료 기준 정산",
+      sourceMemo: "최종 견적서와 통화 기록 기준",
       plannerNotes: "주차 500대, 혼주 대기실 동선 확인 필요.",
       tags: ["단독홀", "채광", "250명"],
       photoIds: [],
@@ -177,6 +215,18 @@ function defaultVendors() {
       instagram: "@orbit_sample",
       website: "",
       contractTerms: "계약금 20% · 제작 5주 · 1회 사이즈 조정 포함",
+      packages: [{ name: "커스텀 커플링", price: "220만원부터", details: "커스텀 밴드 2개\n각인 1회\n사이즈 조정 1회" }],
+      extraFees: [{ name: "다이아 업그레이드", price: "등급별 별도" }],
+      discountBenefits: "평일 상담 계약 혜택 별도",
+      promotionPeriod: "월별 공지",
+      updatedAtLabel: "2026-06-04",
+      scheduleInfo: "제작 기간 평균 5주",
+      reservationPolicy: "계약금 20% 결제 후 제작 시작",
+      operationPolicy: "제작 시작 후 디자인 변경 비용 발생",
+      requiredMeeting: false,
+      commissionRate: "협의",
+      commissionTerms: "출고 완료 기준 정산",
+      sourceMemo: "업체 가격표 및 상담 기록",
       plannerNotes: "평일 예약 시 상담 여유 있음.",
       tags: ["커스텀", "다이아", "종로"],
       photoIds: [],
@@ -190,7 +240,7 @@ function defaultVendors() {
 
 function defaultStore() {
   return {
-    version: 2,
+    version: 3,
     users: {
       [adminId]: {
         id: adminId,
@@ -230,7 +280,7 @@ function readStore() {
     const store = {
       ...fallback,
       ...saved,
-      version: 2,
+      version: 3,
       users: { ...fallback.users, ...(saved.users || {}) },
       weddings: { ...fallback.weddings, ...(saved.weddings || {}) },
       members: { ...fallback.members, ...(saved.members || {}) },
@@ -256,7 +306,7 @@ function readStore() {
 }
 
 function writeStore(store) {
-  localStorage.setItem(storeKey, JSON.stringify({ ...store, version: 2 }));
+  localStorage.setItem(storeKey, JSON.stringify({ ...store, version: 3 }));
 }
 
 function openAssetDb() {
@@ -697,6 +747,71 @@ function renderVendorMedia(vendor, extraClass = "") {
   `;
 }
 
+function renderVendorDetailPanel(vendor, website) {
+  if (state.vendorDetailTab === "pricing") {
+    const packages = vendor.packages || [];
+    const extraFees = vendor.extraFees || [];
+    return `
+      <section class="detail-panel" role="tabpanel">
+        <div class="panel-heading"><div><span class="modal-kicker">Packages</span><h3>상품 구성 및 금액</h3></div><span>${packages.length}개 상품</span></div>
+        ${packages.length ? `<div class="package-list">${packages.map((plan) => `
+          <article class="package-card">
+            <header><strong>${escapeHtml(plan.name || "상품")}</strong><span>${escapeHtml(plan.price || "가격 협의")}</span></header>
+            ${textLines(plan.details).length ? `<ul>${textLines(plan.details).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : `<p>포함 항목이 등록되지 않았습니다.</p>`}
+          </article>
+        `).join("")}</div>` : `<div class="empty-detail">등록된 상품 구성이 없습니다.</div>`}
+        ${extraFees.length ? `
+          <section class="detail-subsection"><h3>${icon("circle-plus")} 추가 비용</h3><dl class="fee-list">${extraFees.map((fee) => `<div><dt>${escapeHtml(fee.name || "추가 항목")}</dt><dd>${escapeHtml(fee.price || "별도 문의")}</dd></div>`).join("")}</dl></section>
+        ` : ""}
+        ${vendor.discountBenefits ? `<section class="detail-note-block benefit-note"><h3>${icon("badge-percent")} 할인·혜택</h3><p>${escapeHtml(vendor.discountBenefits)}</p></section>` : ""}
+      </section>
+    `;
+  }
+
+  if (state.vendorDetailTab === "policy") {
+    return `
+      <section class="detail-panel" role="tabpanel">
+        <div class="policy-meta">
+          <span><small>업데이트</small><strong>${escapeHtml(vendor.updatedAtLabel || "미입력")}</strong></span>
+          <span><small>프로모션</small><strong>${escapeHtml(vendor.promotionPeriod || "없음")}</strong></span>
+          <span><small>사전 미팅</small><strong>${vendor.requiredMeeting ? "필수" : "선택"}</strong></span>
+        </div>
+        ${vendor.scheduleInfo ? `<section class="detail-note-block neutral-note"><h3>${icon("clock-3")} 일정·진행</h3><p>${escapeHtml(vendor.scheduleInfo)}</p></section>` : ""}
+        ${vendor.reservationPolicy ? `<section class="detail-note-block"><h3>${icon("calendar-check-2")} 예약 조건</h3><p>${escapeHtml(vendor.reservationPolicy)}</p></section>` : ""}
+        ${vendor.operationPolicy ? `<section class="detail-note-block warning-note"><h3>${icon("cloud-sun")} 변경·취소·운영 정책</h3><p>${escapeHtml(vendor.operationPolicy)}</p></section>` : ""}
+        <section class="detail-note-block neutral-note"><h3>${icon("file-text")} 계약 조건</h3><p>${escapeHtml(vendor.contractTerms || "등록된 계약 조건이 없습니다.")}</p></section>
+      </section>
+    `;
+  }
+
+  if (state.vendorDetailTab === "planner") {
+    return `
+      <section class="detail-panel" role="tabpanel">
+        <div class="planner-settlement">
+          <div><span>플래너 수수료</span><strong>${escapeHtml(vendor.commissionRate || "미입력")}</strong></div>
+          <p>${escapeHtml(vendor.commissionTerms || "정산 조건이 등록되지 않았습니다.")}</p>
+        </div>
+        ${vendor.sourceMemo ? `<section class="detail-note-block neutral-note"><h3>${icon("messages-square")} 자료 출처·상담 기록</h3><p>${escapeHtml(vendor.sourceMemo)}</p></section>` : ""}
+        ${vendor.plannerNotes ? `<section class="detail-note-block planner-note"><h3>${icon("notebook-pen")} 플래너 메모</h3><p>${escapeHtml(vendor.plannerNotes)}</p></section>` : ""}
+      </section>
+    `;
+  }
+
+  return `
+    <section class="detail-panel" role="tabpanel">
+      ${vendor.description ? `<p class="detail-description">${escapeHtml(vendor.description)}</p>` : ""}
+      ${(vendor.tags || []).length ? `<div class="tag-list">${vendor.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+      <dl class="info-list">
+        <div><dt>${icon("wallet-cards")} 대표 가격</dt><dd>${escapeHtml(vendor.price || "미입력")}</dd></div>
+        <div><dt>${icon("phone")} 연락처</dt><dd>${escapeHtml(vendor.contact || "미입력")}</dd></div>
+        <div><dt>${icon("map-pin")} 위치</dt><dd>${escapeHtml(vendor.address || "미입력")}</dd></div>
+        <div><dt>${icon("instagram")} 인스타그램</dt><dd>${escapeHtml(vendor.instagram || "미입력")}</dd></div>
+        ${website ? `<div><dt>${icon("globe-2")} 웹사이트</dt><dd><a href="${escapeHtml(website)}" target="_blank" rel="noreferrer">사이트 열기 ${icon("arrow-up-right")}</a></dd></div>` : ""}
+      </dl>
+    </section>
+  `;
+}
+
 function renderVendorDetail() {
   const vendor = vendorFor(state.selectedVendorId);
   if (!vendor) return "";
@@ -713,7 +828,7 @@ function renderVendorDetail() {
         <button class="icon-button" type="button" data-action="close-vendor-detail" aria-label="닫기" title="닫기">${icon("x")}</button>
       </header>
       <div class="detail-scroll">
-        <div class="detail-gallery" style="--category-color:${safeColor(category.color)}">
+        <div class="detail-gallery ${state.vendorDetailTab === "overview" ? "" : "compact"}" style="--category-color:${safeColor(category.color)}">
           <div class="detail-main-photo">
             ${photoId ? `<img src="${state.photoUrls.get(photoId)}" alt="${escapeHtml(vendor.name)} 사진 ${index + 1}" />` : renderVendorMedia(vendor, "detail-placeholder")}
             ${photoIds.length > 1 ? `
@@ -729,17 +844,15 @@ function renderVendorDetail() {
             <div><span class="status-tag">${escapeHtml(vendor.status || "관심")}</span><h2>${escapeHtml(vendor.name)}</h2></div>
             <button class="favorite-button detail-favorite ${vendor.favorite ? "active" : ""}" type="button" data-action="toggle-favorite" data-vendor="${vendor.id}" aria-label="즐겨찾기">${icon("heart")}</button>
           </div>
-          ${vendor.description ? `<p class="detail-description">${escapeHtml(vendor.description)}</p>` : ""}
-          ${(vendor.tags || []).length ? `<div class="tag-list">${vendor.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
-          <dl class="info-list">
-            <div><dt>${icon("wallet-cards")} 가격</dt><dd>${escapeHtml(vendor.price || "미입력")}</dd></div>
-            <div><dt>${icon("phone")} 연락처</dt><dd>${escapeHtml(vendor.contact || "미입력")}</dd></div>
-            <div><dt>${icon("map-pin")} 위치</dt><dd>${escapeHtml(vendor.address || "미입력")}</dd></div>
-            <div><dt>${icon("instagram")} 인스타그램</dt><dd>${escapeHtml(vendor.instagram || "미입력")}</dd></div>
-            ${website ? `<div><dt>${icon("globe-2")} 웹사이트</dt><dd><a href="${escapeHtml(website)}" target="_blank" rel="noreferrer">사이트 열기 ${icon("arrow-up-right")}</a></dd></div>` : ""}
-          </dl>
-          <section class="detail-note-block"><h3>${icon("file-text")} 계약 조건</h3><p>${escapeHtml(vendor.contractTerms || "등록된 계약 조건이 없습니다.")}</p></section>
-          ${vendor.plannerNotes ? `<section class="detail-note-block planner-note"><h3>${icon("notebook-pen")} 플래너 메모</h3><p>${escapeHtml(vendor.plannerNotes)}</p></section>` : ""}
+          <div class="detail-tabs" role="tablist" aria-label="업체 정보 구분">
+            ${[
+              ["overview", "grid-2x2", "기본정보"],
+              ["pricing", "wallet-cards", "상품·가격"],
+              ["policy", "file-check-2", "계약·공지"],
+              ["planner", "briefcase-business", "플래너"]
+            ].map(([tab, tabIcon, label]) => `<button class="${state.vendorDetailTab === tab ? "active" : ""}" type="button" role="tab" aria-selected="${state.vendorDetailTab === tab}" data-action="set-vendor-detail-tab" data-tab="${tab}">${icon(tabIcon)}<span>${label}</span></button>`).join("")}
+          </div>
+          ${renderVendorDetailPanel(vendor, website)}
         </div>
       </div>
       <footer class="modal-actions">
@@ -751,12 +864,38 @@ function renderVendorDetail() {
   `;
 }
 
+function renderPackageEditorRow(plan = {}) {
+  return `
+    <div class="repeat-row package-editor-row" data-repeat-row="package">
+      <div class="repeat-row-head"><strong>상품안</strong><button class="icon-button" type="button" data-action="remove-repeat-row" aria-label="상품안 삭제">${icon("x")}</button></div>
+      <div class="field-grid two-cols">
+        <label>상품명<input name="packageName" value="${escapeHtml(plan.name || "")}" placeholder="예: T1 Basic" /></label>
+        <label>금액<input name="packagePrice" value="${escapeHtml(plan.price || "")}" placeholder="예: 220만원" /></label>
+      </div>
+      <label>포함 항목<textarea name="packageDetails" rows="4" placeholder="촬영 시간, 의상 수, 원본·앨범 구성 등을 줄마다 입력">${escapeHtml(plan.details || "")}</textarea></label>
+    </div>
+  `;
+}
+
+function renderExtraFeeEditorRow(fee = {}) {
+  return `
+    <div class="repeat-row extra-fee-row" data-repeat-row="fee">
+      <label>추가 항목<input name="extraFeeName" value="${escapeHtml(fee.name || "")}" placeholder="예: 대표 지정비" /></label>
+      <label>금액·조건<input name="extraFeePrice" value="${escapeHtml(fee.price || "")}" placeholder="예: 50만원" /></label>
+      <button class="icon-button" type="button" data-action="remove-repeat-row" aria-label="추가 비용 삭제">${icon("x")}</button>
+    </div>
+  `;
+}
+
 function renderVendorEditor() {
   const isNew = state.editingVendorId === "new";
   const vendor = isNew ? {
     name: "", categoryId: state.selectedCategory === "all" ? state.categories[0]?.id : state.selectedCategory,
     status: "관심", price: "", description: "", contact: "", address: "", instagram: "", website: "",
-    contractTerms: "", plannerNotes: "", tags: [], photoIds: []
+    contractTerms: "", plannerNotes: "", tags: [], photoIds: [], packages: [], extraFees: [],
+    discountBenefits: "", promotionPeriod: "", updatedAtLabel: dateKey(new Date()), scheduleInfo: "",
+    reservationPolicy: "", operationPolicy: "", requiredMeeting: false, commissionRate: "",
+    commissionTerms: "", sourceMemo: ""
   } : vendorFor(state.editingVendorId);
   if (!vendor) return "";
   const existingPhotos = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id));
@@ -796,8 +935,36 @@ function renderVendorEditor() {
           <label>주소<input name="address" value="${escapeHtml(vendor.address)}" placeholder="주소 또는 상담 장소" /></label>
           <label>웹사이트<input name="website" type="url" value="${escapeHtml(vendor.website)}" placeholder="https://" /></label>
           <label>태그<input name="tags" value="${escapeHtml((vendor.tags || []).join(", "))}" placeholder="실크, 채광, 단독홀" /></label>
-          <label>계약 조건<textarea name="contractTerms" rows="4" placeholder="계약금, 취소·변경, 포함 항목 등을 적어주세요">${escapeHtml(vendor.contractTerms)}</textarea></label>
-          <label>플래너 메모<textarea name="plannerNotes" rows="4" placeholder="상담 시에만 확인할 메모">${escapeHtml(vendor.plannerNotes)}</textarea></label>
+
+          <div class="editor-divider"><span>Product & Price</span><strong>상품 구성 및 비용</strong></div>
+          <div class="repeat-editor">
+            <div class="editor-section-title"><strong>상품안</strong><button class="secondary small-action" type="button" data-action="add-package-row">${icon("plus")} 상품 추가</button></div>
+            <div class="repeat-list" data-package-list>${(vendor.packages?.length ? vendor.packages : [{}]).map(renderPackageEditorRow).join("")}</div>
+          </div>
+          <div class="repeat-editor">
+            <div class="editor-section-title"><strong>추가 비용</strong><button class="secondary small-action" type="button" data-action="add-fee-row">${icon("plus")} 항목 추가</button></div>
+            <div class="repeat-list" data-fee-list>${(vendor.extraFees?.length ? vendor.extraFees : [{}]).map(renderExtraFeeEditorRow).join("")}</div>
+          </div>
+          <label>할인·혜택<textarea name="discountBenefits" rows="3" placeholder="동시 계약 할인, 시즌 혜택 등">${escapeHtml(vendor.discountBenefits || "")}</textarea></label>
+
+          <div class="editor-divider"><span>Notice & Policy</span><strong>계약·공지·운영 정보</strong></div>
+          <div class="field-grid two-cols">
+            <label>정보 업데이트일<input name="updatedAtLabel" type="date" value="${escapeHtml(vendor.updatedAtLabel || "")}" /></label>
+            <label>프로모션 기간<input name="promotionPeriod" value="${escapeHtml(vendor.promotionPeriod || "")}" placeholder="예: 7/13 - 8/13" /></label>
+          </div>
+          <label class="meeting-check"><input name="requiredMeeting" type="checkbox" ${vendor.requiredMeeting ? "checked" : ""} /><span><strong>사전 미팅 필수</strong><small>계약 또는 진행 전 상담이 필요한 업체</small></span></label>
+          <label>일정·진행 안내<textarea name="scheduleInfo" rows="3" placeholder="촬영 타임, 상담 시간, 제작 기간 등">${escapeHtml(vendor.scheduleInfo || "")}</textarea></label>
+          <label>예약 조건<textarea name="reservationPolicy" rows="3" placeholder="예약금, 가예약 여부, 일정 확정 기준">${escapeHtml(vendor.reservationPolicy || "")}</textarea></label>
+          <label>변경·취소·운영 정책<textarea name="operationPolicy" rows="4" placeholder="우천, 일정 변경, 취소, 환불 기준">${escapeHtml(vendor.operationPolicy || "")}</textarea></label>
+          <label>계약 조건<textarea name="contractTerms" rows="4" placeholder="계약서의 주요 조건과 포함·제외 항목">${escapeHtml(vendor.contractTerms)}</textarea></label>
+
+          <div class="editor-divider"><span>Planner Only</span><strong>플래너 내부 정보</strong></div>
+          <div class="field-grid two-cols">
+            <label>수수료율<input name="commissionRate" value="${escapeHtml(vendor.commissionRate || "")}" placeholder="예: 15%" /></label>
+            <label>정산 조건<input name="commissionTerms" value="${escapeHtml(vendor.commissionTerms || "")}" placeholder="예: 익월 9일 정산" /></label>
+          </div>
+          <label>자료 출처·상담 기록<textarea name="sourceMemo" rows="4" placeholder="카카오톡, 통화, 업체 공지의 핵심 내용과 확인일">${escapeHtml(vendor.sourceMemo || "")}</textarea></label>
+          <label>플래너 메모<textarea name="plannerNotes" rows="4" placeholder="고객에게는 보이지 않는 내부 메모">${escapeHtml(vendor.plannerNotes)}</textarea></label>
         </section>
       </div>
       <footer class="modal-actions"><button class="secondary" type="button" data-action="close-vendor-editor">취소</button><button class="primary grow" type="submit">${icon("save")} 저장</button></footer>
@@ -1094,6 +1261,20 @@ async function handleSaveVendor(form) {
     const store = readStore();
     const now = new Date().toISOString();
     const tags = String(formData.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean).slice(0, 12);
+    const packageNames = formData.getAll("packageName");
+    const packagePrices = formData.getAll("packagePrice");
+    const packageDetails = formData.getAll("packageDetails");
+    const packages = packageNames.map((name, index) => ({
+      name: String(name || "").trim(),
+      price: String(packagePrices[index] || "").trim(),
+      details: String(packageDetails[index] || "").trim()
+    })).filter((plan) => plan.name || plan.price || plan.details);
+    const extraFeeNames = formData.getAll("extraFeeName");
+    const extraFeePrices = formData.getAll("extraFeePrice");
+    const extraFees = extraFeeNames.map((name, index) => ({
+      name: String(name || "").trim(),
+      price: String(extraFeePrices[index] || "").trim()
+    })).filter((fee) => fee.name || fee.price);
     store.vendors[state.profile.weddingId] = store.vendors[state.profile.weddingId] || {};
     store.vendors[state.profile.weddingId][vendorId] = {
       ...existing,
@@ -1108,6 +1289,18 @@ async function handleSaveVendor(form) {
       instagram: String(formData.get("instagram") || "").trim(),
       website: String(formData.get("website") || "").trim(),
       contractTerms: String(formData.get("contractTerms") || "").trim(),
+      packages,
+      extraFees,
+      discountBenefits: String(formData.get("discountBenefits") || "").trim(),
+      promotionPeriod: String(formData.get("promotionPeriod") || "").trim(),
+      updatedAtLabel: String(formData.get("updatedAtLabel") || "").trim(),
+      scheduleInfo: String(formData.get("scheduleInfo") || "").trim(),
+      reservationPolicy: String(formData.get("reservationPolicy") || "").trim(),
+      operationPolicy: String(formData.get("operationPolicy") || "").trim(),
+      requiredMeeting: formData.has("requiredMeeting"),
+      commissionRate: String(formData.get("commissionRate") || "").trim(),
+      commissionTerms: String(formData.get("commissionTerms") || "").trim(),
+      sourceMemo: String(formData.get("sourceMemo") || "").trim(),
       plannerNotes: String(formData.get("plannerNotes") || "").trim(),
       tags,
       photoIds: [...retainedPhotoIds, ...createdIds],
@@ -1122,6 +1315,7 @@ async function handleSaveVendor(form) {
     state.editingVendorId = null;
     state.selectedVendorId = vendorId;
     state.selectedVendorPhotoIndex = 0;
+    state.vendorDetailTab = "overview";
     setSession(state.authUser.uid);
     await hydratePhotoLibrary();
     render();
@@ -1234,7 +1428,7 @@ async function exportAllData() {
   for (const record of records) {
     photos.push({ ...record, blob: undefined, dataUrl: await blobToDataUrl(record.blob) });
   }
-  const payload = { app: "Marryday Planner", version: 2, exportedAt: new Date().toISOString(), store: readStore(), photos };
+  const payload = { app: "Marryday Planner", version: 3, exportedAt: new Date().toISOString(), store: readStore(), photos };
   const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1368,10 +1562,20 @@ document.addEventListener("click", async (event) => {
   if (action === "png") await downloadPng();
   if (action === "set-category") { state.selectedCategory = target.dataset.category; render(); }
   if (action === "new-vendor") { state.editingVendorId = "new"; state.selectedVendorId = null; render(); }
-  if (action === "open-vendor") { state.selectedVendorId = target.dataset.vendor; state.selectedVendorPhotoIndex = 0; render(); }
+  if (action === "open-vendor") { state.selectedVendorId = target.dataset.vendor; state.selectedVendorPhotoIndex = 0; state.vendorDetailTab = "overview"; render(); }
   if (action === "close-vendor-detail") { state.selectedVendorId = null; render(); }
+  if (action === "set-vendor-detail-tab") { state.vendorDetailTab = target.dataset.tab; render(); }
   if (action === "edit-vendor") { state.editingVendorId = target.dataset.vendor; state.selectedVendorId = null; render(); }
   if (action === "close-vendor-editor") { clearPendingPhotoUrls(); state.editingVendorId = null; render(); }
+  if (action === "add-package-row") {
+    target.closest("form").querySelector("[data-package-list]").insertAdjacentHTML("beforeend", renderPackageEditorRow());
+    activateIcons();
+  }
+  if (action === "add-fee-row") {
+    target.closest("form").querySelector("[data-fee-list]").insertAdjacentHTML("beforeend", renderExtraFeeEditorRow());
+    activateIcons();
+  }
+  if (action === "remove-repeat-row") target.closest("[data-repeat-row]")?.remove();
   if (action === "toggle-favorite") toggleFavorite(target.dataset.vendor);
   if (action === "vendor-photo-prev") moveVendorPhoto(-1);
   if (action === "vendor-photo-next") moveVendorPhoto(1);
