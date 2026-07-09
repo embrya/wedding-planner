@@ -7,20 +7,51 @@ const storeKey = "weddingPlanner.store";
 const sessionKey = "weddingPlanner.session";
 const weddingId = "wedding";
 const adminId = "admin";
+const assetDbName = "weddingPlanner.assets";
+const assetStoreName = "photos";
+const vendorStatuses = ["관심", "상담 예정", "견적 받음", "비교 중", "계약 완료", "보류"];
 
-let state = {
-  authUser: null,
-  profile: null,
-  wedding: null,
-  members: [],
-  dayNotes: new Map(),
-  weekNotes: new Map(),
-  selectedDate: null,
-  loading: false,
-  error: ""
-};
+function freshState() {
+  return {
+    authUser: null,
+    profile: null,
+    wedding: null,
+    members: [],
+    dayNotes: new Map(),
+    weekNotes: new Map(),
+    categories: [],
+    vendors: [],
+    photoUrls: new Map(),
+    photoRecords: new Map(),
+    activeView: "calendar",
+    selectedCategory: "all",
+    vendorQuery: "",
+    selectedDate: null,
+    selectedVendorId: null,
+    selectedVendorPhotoIndex: 0,
+    editingVendorId: null,
+    categoryManagerOpen: false,
+    presentationVendorId: null,
+    presentationPhotoIndex: 0,
+    pendingPhotoUrls: [],
+    loading: false,
+    error: ""
+  };
+}
 
+let state = freshState();
 let weekTimer;
+let assetDbPromise;
+
+function icon(name, className = "") {
+  return `<i data-lucide="${name}" class="${className}" aria-hidden="true"></i>`;
+}
+
+function activateIcons() {
+  requestAnimationFrame(() => {
+    if (window.lucide) window.lucide.createIcons({ attrs: { "stroke-width": 1.8 } });
+  });
+}
 
 function escapeHtml(value = "") {
   return String(value)
@@ -31,6 +62,19 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+function safeColor(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : "#657b74";
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
 function dateKey(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -39,13 +83,19 @@ function dateKey(date) {
 }
 
 function parseDate(key) {
-  const [year, month, day] = key.split("-").map(Number);
+  const [year, month, day] = String(key || "").split("-").map(Number);
   return new Date(year, month - 1, day);
 }
 
 function displayDate(key) {
   const date = parseDate(key);
   return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function formatDateLong(key) {
+  const date = parseDate(key);
+  if (Number.isNaN(date.getTime())) return "날짜 미정";
+  return new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(date);
 }
 
 function weekKey(date) {
@@ -60,8 +110,87 @@ function defaultWeddingDate() {
   return dateKey(date);
 }
 
+function defaultCategories() {
+  return [
+    { id: "dress", name: "드레스", color: "#c75a6a", icon: "sparkles" },
+    { id: "venue", name: "웨딩홀", color: "#39756c", icon: "building-2" },
+    { id: "jewelry", name: "예물", color: "#a67b33", icon: "gem" },
+    { id: "studio", name: "스튜디오", color: "#5f7094", icon: "camera" },
+    { id: "makeup", name: "메이크업", color: "#a76578", icon: "wand-sparkles" },
+    { id: "honeymoon", name: "허니문", color: "#3c7f93", icon: "plane" },
+    { id: "other", name: "기타", color: "#6f716c", icon: "folder", locked: true }
+  ];
+}
+
+function defaultVendors() {
+  const now = new Date().toISOString();
+  return {
+    "sample-dress": {
+      id: "sample-dress",
+      name: "아뜰리에 르블랑 (샘플)",
+      categoryId: "dress",
+      status: "비교 중",
+      price: "본식 280만원부터",
+      description: "미카도 실크와 절제된 실루엣 중심의 드레스샵. 상담 때 실제 사진으로 교체해 사용하세요.",
+      contact: "02-0000-0000",
+      address: "서울 강남구 청담동",
+      instagram: "@atelier_sample",
+      website: "",
+      contractTerms: "피팅 3벌 · 계약금 30% · 일정 변경은 30일 전 협의",
+      plannerNotes: "샘플 데이터입니다. 편집하거나 삭제해도 됩니다.",
+      tags: ["실크", "미니멀", "본식"],
+      photoIds: [],
+      favorite: true,
+      sample: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    "sample-venue": {
+      id: "sample-venue",
+      name: "라움 가든홀 (샘플)",
+      categoryId: "venue",
+      status: "견적 받음",
+      price: "식대 8.9만원 · 대관 650만원",
+      description: "채광이 좋은 단독홀. 보증 인원과 꽃장식 조건을 함께 비교하기 좋습니다.",
+      contact: "02-0000-1000",
+      address: "서울 서초구 반포동",
+      instagram: "@raum_sample",
+      website: "",
+      contractTerms: "보증 250명 · 계약금 200만원 · 외부 생화 반입 협의",
+      plannerNotes: "주차 500대, 혼주 대기실 동선 확인 필요.",
+      tags: ["단독홀", "채광", "250명"],
+      photoIds: [],
+      favorite: false,
+      sample: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    "sample-jewelry": {
+      id: "sample-jewelry",
+      name: "오르빛 주얼리 (샘플)",
+      categoryId: "jewelry",
+      status: "관심",
+      price: "커플링 220만원부터",
+      description: "다이아몬드와 커스텀 밴드 비교용 샘플 업체입니다.",
+      contact: "02-0000-2000",
+      address: "서울 종로구 봉익동",
+      instagram: "@orbit_sample",
+      website: "",
+      contractTerms: "계약금 20% · 제작 5주 · 1회 사이즈 조정 포함",
+      plannerNotes: "평일 예약 시 상담 여유 있음.",
+      tags: ["커스텀", "다이아", "종로"],
+      photoIds: [],
+      favorite: false,
+      sample: true,
+      createdAt: now,
+      updatedAt: now
+    }
+  };
+}
+
 function defaultStore() {
   return {
+    version: 2,
     users: {
       [adminId]: {
         id: adminId,
@@ -84,19 +213,13 @@ function defaultStore() {
     },
     members: {
       [weddingId]: {
-        [adminId]: {
-          role: "planner",
-          displayName: "관리자",
-          loginId: "admin"
-        }
+        [adminId]: { role: "planner", displayName: "관리자", loginId: "admin" }
       }
     },
-    dayNotes: {
-      [weddingId]: {}
-    },
-    weekNotes: {
-      [weddingId]: {}
-    }
+    dayNotes: { [weddingId]: {} },
+    weekNotes: { [weddingId]: {} },
+    categories: { [weddingId]: defaultCategories() },
+    vendors: { [weddingId]: defaultVendors() }
   };
 }
 
@@ -104,22 +227,106 @@ function readStore() {
   const fallback = defaultStore();
   try {
     const saved = JSON.parse(localStorage.getItem(storeKey) || "{}");
-    return {
+    const store = {
       ...fallback,
       ...saved,
+      version: 2,
       users: { ...fallback.users, ...(saved.users || {}) },
       weddings: { ...fallback.weddings, ...(saved.weddings || {}) },
       members: { ...fallback.members, ...(saved.members || {}) },
       dayNotes: { ...fallback.dayNotes, ...(saved.dayNotes || {}) },
-      weekNotes: { ...fallback.weekNotes, ...(saved.weekNotes || {}) }
+      weekNotes: { ...fallback.weekNotes, ...(saved.weekNotes || {}) },
+      categories: { ...fallback.categories, ...(saved.categories || {}) },
+      vendors: { ...fallback.vendors, ...(saved.vendors || {}) }
     };
+
+    Object.keys(store.weddings).forEach((id) => {
+      store.members[id] = store.members[id] || {};
+      store.dayNotes[id] = store.dayNotes[id] || {};
+      store.weekNotes[id] = store.weekNotes[id] || {};
+      store.categories[id] = Array.isArray(store.categories[id]) && store.categories[id].length
+        ? store.categories[id]
+        : defaultCategories();
+      store.vendors[id] = store.vendors[id] || {};
+    });
+    return store;
   } catch {
     return fallback;
   }
 }
 
 function writeStore(store) {
-  localStorage.setItem(storeKey, JSON.stringify(store));
+  localStorage.setItem(storeKey, JSON.stringify({ ...store, version: 2 }));
+}
+
+function openAssetDb() {
+  if (assetDbPromise) return assetDbPromise;
+  assetDbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(assetDbName, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(assetStoreName)) {
+        const store = db.createObjectStore(assetStoreName, { keyPath: "id" });
+        store.createIndex("weddingId", "weddingId", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return assetDbPromise;
+}
+
+async function getAllPhotoRecords() {
+  const db = await openAssetDb();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(assetStoreName, "readonly").objectStore(assetStoreName).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function putPhotoRecord(record) {
+  const db = await openAssetDb();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(assetStoreName, "readwrite").objectStore(assetStoreName).put(record);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function deletePhotoRecord(id) {
+  const db = await openAssetDb();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(assetStoreName, "readwrite").objectStore(assetStoreName).delete(id);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function clearPhotoRecords() {
+  const db = await openAssetDb();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(assetStoreName, "readwrite").objectStore(assetStoreName).clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function revokePhotoUrls() {
+  state.photoUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.photoUrls.clear();
+  state.photoRecords.clear();
+}
+
+async function hydratePhotoLibrary() {
+  const currentWeddingId = state.profile?.weddingId;
+  if (!currentWeddingId) return;
+  const records = (await getAllPhotoRecords()).filter((record) => record.weddingId === currentWeddingId);
+  revokePhotoUrls();
+  records.forEach((record) => {
+    state.photoRecords.set(record.id, record);
+    state.photoUrls.set(record.id, URL.createObjectURL(record.blob));
+  });
 }
 
 function setSession(userId) {
@@ -127,19 +334,20 @@ function setSession(userId) {
   const user = store.users[userId];
   if (!user) return false;
   const currentWeddingId = user.weddingId || weddingId;
-
   state.authUser = { uid: user.id, loginId: user.loginId };
   state.profile = { ...user };
   state.wedding = { id: currentWeddingId, ...store.weddings[currentWeddingId] };
   state.members = Object.entries(store.members[currentWeddingId] || {}).map(([id, member]) => ({ id, ...member }));
   state.dayNotes = new Map(Object.entries(store.dayNotes[currentWeddingId] || {}).map(([id, note]) => [id, { id, ...note }]));
   state.weekNotes = new Map(Object.entries(store.weekNotes[currentWeddingId] || {}).map(([id, note]) => [id, { id, ...note }]));
+  state.categories = [...(store.categories[currentWeddingId] || defaultCategories())];
+  state.vendors = Object.values(store.vendors[currentWeddingId] || {}).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   state.loading = false;
   state.error = "";
   return true;
 }
 
-function loginUser(loginId, password) {
+async function loginUser(loginId, password) {
   const normalizedLogin = String(loginId || "").trim();
   const store = readStore();
   const user = Object.values(store.users).find((item) => item.loginId === normalizedLogin && item.password === password);
@@ -147,22 +355,20 @@ function loginUser(loginId, password) {
   localStorage.setItem(sessionKey, user.id);
   setSession(user.id);
   render();
+  try {
+    await hydratePhotoLibrary();
+    render();
+  } catch {
+    notify("사진 저장소를 불러오지 못했습니다.");
+  }
   return true;
 }
 
 function logoutUser() {
   localStorage.removeItem(sessionKey);
-  state = {
-    authUser: null,
-    profile: null,
-    wedding: null,
-    members: [],
-    dayNotes: new Map(),
-    weekNotes: new Map(),
-    selectedDate: null,
-    loading: false,
-    error: ""
-  };
+  revokePhotoUrls();
+  clearPendingPhotoUrls();
+  state = freshState();
   render();
 }
 
@@ -181,9 +387,7 @@ function getMonthCells(monthDate) {
   const last = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
   const cells = [];
   for (let i = 0; i < first.getDay(); i += 1) cells.push(null);
-  for (let day = 1; day <= last.getDate(); day += 1) {
-    cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
-  }
+  for (let day = 1; day <= last.getDate(); day += 1) cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
   while (cells.length % 7 !== 0) cells.push(null);
   return cells;
 }
@@ -192,107 +396,151 @@ function getMonthRows(monthDate) {
   const cells = getMonthCells(monthDate);
   const rows = [];
   for (let i = 0; i < cells.length; i += 7) {
-    const weekDays = cells.slice(i, i + 7);
-    const realDays = weekDays.filter(Boolean);
-    if (realDays.length) {
-      rows.push({
-        key: weekKey(realDays[0]),
-        days: weekDays
-      });
-    }
+    const days = cells.slice(i, i + 7);
+    const realDays = days.filter(Boolean);
+    if (realDays.length) rows.push({ key: weekKey(realDays[0]), days });
   }
   return rows;
 }
 
-function showError(message) {
-  state.error = message;
-  render();
+function daysToWedding() {
+  const target = parseDate(state.wedding?.weddingDate);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (Number.isNaN(target.getTime())) return "날짜 미정";
+  const days = Math.round((target - today) / 86400000);
+  if (days === 0) return "D-DAY";
+  return days > 0 ? `D-${days}` : `D+${Math.abs(days)}`;
+}
+
+function categoryFor(id) {
+  return state.categories.find((category) => category.id === id) || { id: "other", name: "기타", color: "#6f716c", icon: "folder" };
+}
+
+function vendorFor(id) {
+  return state.vendors.find((vendor) => vendor.id === id);
+}
+
+function notify(message) {
+  document.querySelector(".toast")?.remove();
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.setAttribute("role", "status");
+  toast.innerHTML = `${icon("check-circle-2")}<span>${escapeHtml(message)}</span>`;
+  document.body.append(toast);
+  activateIcons();
+  setTimeout(() => toast.remove(), 2600);
 }
 
 function renderLogin() {
   appRoot.innerHTML = `
-    <section class="login">
-      <form class="login-panel" data-action="login">
-        <div class="brand">
-          <div class="eyebrow">Wedding Calendar</div>
-          <h1>결혼 준비 일정을 한 장으로 관리</h1>
-          <p class="muted">플래너 계정으로 신랑/신부 계정을 발급하고, 모바일 달력과 인쇄용 연간표로 확인합니다.</p>
+    <section class="login-page">
+      <div class="login-visual" aria-hidden="true">
+        <img src="./assets/calendar-reference.jpg" alt="" />
+        <div class="login-visual-label">
+          <span>Marryday</span>
+          <strong>Wedding planner archive</strong>
         </div>
-        <p class="muted">최초 관리자 로그인: <strong>admin / admin</strong></p>
-        <label>아이디<input name="loginId" type="text" autocomplete="username" required /></label>
-        <label>비밀번호<input name="password" type="password" autocomplete="current-password" required /></label>
+      </div>
+      <form class="login-panel" data-action="login">
+        <div class="login-brand">
+          <span class="brand-mark">M</span>
+          <div>
+            <div class="eyebrow">Marryday Planner</div>
+            <h1>결혼 준비의 모든 장면</h1>
+          </div>
+        </div>
+        <div class="login-fields">
+          <label>아이디<input name="loginId" type="text" autocomplete="username" placeholder="아이디" required /></label>
+          <label>비밀번호<input name="password" type="password" autocomplete="current-password" placeholder="비밀번호" required /></label>
+        </div>
         ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ""}
-        <button type="submit">로그인</button>
+        <button class="primary wide" type="submit">로그인</button>
+        <div class="login-foot">
+          <span>${icon("smartphone")} 이 기기 전용</span>
+          <span>최초 계정 <strong>admin / admin</strong></span>
+        </div>
       </form>
     </section>
   `;
 }
 
 function renderApp() {
-  const names = state.wedding ? `${state.wedding.groomName || "신랑"} · ${state.wedding.brideName || "신부"}` : "";
+  if (!plannerMode()) state.activeView = "calendar";
+  const names = `${state.wedding?.groomName || "신랑"} · ${state.wedding?.brideName || "신부"}`;
+  const view = state.activeView === "vendors"
+    ? renderVendorView()
+    : state.activeView === "manage"
+      ? renderManageView()
+      : renderCalendarView();
+
   appRoot.innerHTML = `
-    <section class="shell">
-      <header class="topbar">
-        <div class="topline">
-          <div>
-            <div class="eyebrow">Wedding Calendar</div>
-            <h2>${escapeHtml(names)}</h2>
-          </div>
-          <span class="role-pill">${roleLabels[state.profile.role]}</span>
-        </div>
-        <div class="actions">
-          <button type="button" data-action="print">PDF 인쇄</button>
-          <button class="secondary" type="button" data-action="png">이미지 저장</button>
-          <button class="ghost" type="button" data-action="logout">로그아웃</button>
+    <section class="app-shell">
+      <header class="app-topbar">
+        <button class="brand-button" type="button" data-action="navigate" data-view="calendar" aria-label="캘린더로 이동">
+          <span class="brand-mark small">M</span>
+          <span><strong>${escapeHtml(names)}</strong><small>${escapeHtml(formatDateLong(state.wedding?.weddingDate))}</small></span>
+        </button>
+        <div class="topbar-meta">
+          <span class="dday">${escapeHtml(daysToWedding())}</span>
+          <span class="role-pill">${escapeHtml(roleLabels[state.profile.role])}</span>
+          <button class="icon-button" type="button" data-action="logout" aria-label="로그아웃" title="로그아웃">${icon("log-out")}</button>
         </div>
       </header>
-      <div class="grid">
-        <section class="calendar">${monthsFromToday().map(renderMonth).join("")}</section>
-        ${renderUpcoming()}
-        ${plannerMode() ? renderPlannerPanel() : ""}
-      </div>
+      <main class="app-main">${view}</main>
+      ${plannerMode() ? renderBottomNav() : ""}
       ${state.selectedDate ? renderDayEditor() : ""}
+      ${state.selectedVendorId ? renderVendorDetail() : ""}
+      ${state.editingVendorId ? renderVendorEditor() : ""}
+      ${state.categoryManagerOpen ? renderCategoryManager() : ""}
+      ${state.presentationVendorId ? renderPresentation() : ""}
     </section>
   `;
   renderPrintSheet();
 }
 
-function renderPlannerPanel() {
+function renderBottomNav() {
+  const items = [
+    { view: "calendar", label: "캘린더", icon: "calendar-days" },
+    { view: "vendors", label: "레퍼런스", icon: "images" },
+    { view: "manage", label: "관리", icon: "settings-2" }
+  ];
   return `
-    <details class="panel planner-panel">
-      <summary>관리 / 계정 발급</summary>
-      <div class="planner-panel-body">
-        <form class="form-grid" data-action="save-wedding">
-          <div class="form-grid two">
-            <label>신랑 이름<input name="groomName" value="${escapeHtml(state.wedding?.groomName || "")}" required /></label>
-            <label>신부 이름<input name="brideName" value="${escapeHtml(state.wedding?.brideName || "")}" required /></label>
-          </div>
-          <div class="form-grid two">
-            <label>예식일<input name="weddingDate" type="date" value="${escapeHtml(state.wedding?.weddingDate || "")}" required /></label>
-            <label>플래너명<input name="plannerName" value="${escapeHtml(state.wedding?.plannerName || "")}" /></label>
-          </div>
-          <button type="submit">저장</button>
-        </form>
-        <form class="form-grid" data-action="create-account">
-          <h3>신랑/신부 로그인 발급</h3>
-          <div class="form-grid two">
-            <label>역할
-              <select name="role">
-                <option value="groom">신랑</option>
-                <option value="bride">신부</option>
-              </select>
-            </label>
-            <label>이름<input name="displayName" required /></label>
-          </div>
-          <label>로그인 아이디<input name="loginId" type="text" required /></label>
-          <div class="form-grid two">
-            <label>임시 비밀번호<input name="password" minlength="1" value="${generatePassword()}" required /></label>
-            <button class="secondary" type="button" data-action="regen-password">비번 새로</button>
-          </div>
-          <button type="submit">계정 발급</button>
-        </form>
+    <nav class="bottom-nav" aria-label="주요 메뉴">
+      ${items.map((item) => `
+        <button class="${state.activeView === item.view ? "active" : ""}" type="button" data-action="navigate" data-view="${item.view}">
+          ${icon(item.icon)}<span>${item.label}</span>
+        </button>
+      `).join("")}
+    </nav>
+  `;
+}
+
+function renderCalendarView() {
+  const months = monthsFromToday();
+  const first = months[0];
+  const last = months.at(-1);
+  return `
+    <section class="view calendar-view">
+      <header class="view-heading">
+        <div>
+          <div class="eyebrow">12 Month Plan</div>
+          <h1>웨딩 캘린더</h1>
+          <p>${first.getFullYear()}.${String(first.getMonth() + 1).padStart(2, "0")} - ${last.getFullYear()}.${String(last.getMonth() + 1).padStart(2, "0")}</p>
+        </div>
+        <div class="heading-actions">
+          <button class="tool-button" type="button" data-action="print">${icon("printer")}<span>PDF</span></button>
+          <button class="tool-button" type="button" data-action="png">${icon("image-down")}<span>이미지</span></button>
+        </div>
+      </header>
+      <div class="calendar-legend">
+        <span><i class="legend-today"></i>오늘</span>
+        <span><i class="legend-note"></i>일정 있음</span>
+        ${plannerMode() ? `<span class="legend-help">날짜를 누르면 메모</span>` : ""}
       </div>
-    </details>
+      <section class="calendar">${months.map(renderMonth).join("")}</section>
+      ${renderUpcoming()}
+    </section>
   `;
 }
 
@@ -301,12 +549,12 @@ function renderMonth(monthDate) {
   return `
     <article class="month-card">
       <div class="month-head">
-        <div class="month-name">${monthDate.getMonth() + 1}</div>
+        <div><span class="month-number">${monthDate.getMonth() + 1}</span><span class="month-label">월</span></div>
         <strong>${monthDate.getFullYear()}</strong>
       </div>
       <div class="week-calendar-head">
         <div class="weekday">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
-        <span>주별 코멘트</span>
+        <span>WEEK NOTE</span>
       </div>
       <div class="week-rows">
         ${getMonthRows(monthDate).map((row) => {
@@ -317,47 +565,19 @@ function renderMonth(monthDate) {
             const classes = ["day"];
             if (key === todayKey) classes.push("today");
             if (state.dayNotes.has(key)) classes.push("has-note");
-            return `<button class="${classes.join(" ")}" type="button" data-action="select-day" data-date="${key}">${date.getDate()}</button>`;
+            return `<button class="${classes.join(" ")}" type="button" data-action="select-day" data-date="${key}" aria-label="${key}">${date.getDate()}</button>`;
           }).join("");
-          if (plannerMode()) {
-            return `
-              <div class="week-row">
-                <div class="week-days">${days}</div>
-                <textarea class="week-comment" data-action="week-note" data-week="${row.key}" placeholder="${displayDate(row.key)} 주 코멘트">${escapeHtml(value)}</textarea>
-              </div>
-            `;
-          }
           return `
             <div class="week-row">
               <div class="week-days">${days}</div>
-              <div class="week-comment week-read">${escapeHtml(value || "-")}</div>
+              ${plannerMode()
+                ? `<textarea class="week-comment" data-action="week-note" data-week="${row.key}" placeholder="메모" aria-label="${row.key} 주간 메모">${escapeHtml(value)}</textarea>`
+                : `<div class="week-comment week-read">${escapeHtml(value || "")}</div>`}
             </div>
           `;
         }).join("")}
       </div>
     </article>
-  `;
-}
-
-function renderDayEditor() {
-  const note = state.dayNotes.get(state.selectedDate);
-  const readonly = !plannerMode();
-  return `
-    <div class="backdrop" data-action="close-editor"></div>
-    <form class="day-editor" data-action="save-day">
-      <div class="topline">
-        <h3>${escapeHtml(state.selectedDate)} 일정</h3>
-        <button class="ghost" type="button" data-action="close-editor">닫기</button>
-      </div>
-      <label>제목<input name="title" value="${escapeHtml(note?.title || "")}" ${readonly ? "readonly" : ""} /></label>
-      <label>메모<textarea name="text" ${readonly ? "readonly" : ""}>${escapeHtml(note?.text || "")}</textarea></label>
-      ${readonly ? "" : `
-        <div class="row">
-          <button type="submit">저장</button>
-          <button class="secondary" type="button" data-action="delete-day" ${note ? "" : "disabled"}>삭제</button>
-        </div>
-      `}
-    </form>
   `;
 }
 
@@ -368,60 +588,345 @@ function renderUpcoming() {
     .sort((a, b) => a.id.localeCompare(b.id))
     .slice(0, 8);
   return `
-    <section class="event-list">
-      <h3>다가올 이벤트</h3>
-      ${events.length ? events.map((note) => `
-        <button class="event ghost" type="button" data-action="select-day" data-date="${note.id}">
-          <span class="event-date">${displayDate(note.id)}</span>
-          <span><strong>${escapeHtml(note.title || "일정")}</strong><br><span class="muted">${escapeHtml(note.text || "")}</span></span>
-        </button>
-      `).join("") : `<p class="muted">다가올 일정이 없습니다.</p>`}
+    <section class="upcoming-section">
+      <div class="section-title-row">
+        <div><div class="eyebrow">Coming Up</div><h2>다가올 이벤트</h2></div>
+        <span>${events.length}건</span>
+      </div>
+      <div class="event-list">
+        ${events.length ? events.map((note) => `
+          <button class="event-row" type="button" data-action="select-day" data-date="${note.id}">
+            <span class="event-date"><strong>${parseDate(note.id).getDate()}</strong><small>${parseDate(note.id).getMonth() + 1}월</small></span>
+            <span class="event-copy"><strong>${escapeHtml(note.title || "일정")}</strong><small>${escapeHtml(note.text || "메모 없음")}</small></span>
+            ${icon("chevron-right")}
+          </button>
+        `).join("") : `<div class="empty-inline">${icon("calendar-check")}<span>다가올 일정이 없습니다.</span></div>`}
+      </div>
     </section>
   `;
 }
 
+function filteredVendors() {
+  const query = state.vendorQuery.trim().toLowerCase();
+  return state.vendors.filter((vendor) => {
+    const categoryMatch = state.selectedCategory === "all" || vendor.categoryId === state.selectedCategory;
+    const haystack = [vendor.name, vendor.description, vendor.price, ...(vendor.tags || [])].join(" ").toLowerCase();
+    return categoryMatch && (!query || haystack.includes(query));
+  });
+}
+
+function renderVendorView() {
+  return `
+    <section class="view vendor-view">
+      <header class="view-heading vendor-heading">
+        <div>
+          <div class="eyebrow">Planner Library</div>
+          <h1>웨딩 레퍼런스</h1>
+          <p>업체 ${state.vendors.length}곳 · 사진 ${state.photoRecords.size}장</p>
+        </div>
+        <button class="primary compact" type="button" data-action="new-vendor">${icon("plus")}<span>업체 등록</span></button>
+      </header>
+      <div class="vendor-tools">
+        <label class="search-field">${icon("search")}<input data-action="vendor-search" type="search" value="${escapeHtml(state.vendorQuery)}" placeholder="업체명, 태그, 가격 검색" aria-label="업체 검색" /></label>
+        <button class="icon-button bordered" type="button" data-action="open-category-manager" aria-label="카테고리 관리" title="카테고리 관리">${icon("folder-plus")}</button>
+      </div>
+      <div class="category-strip" aria-label="업체 카테고리">
+        <button class="category-chip ${state.selectedCategory === "all" ? "active" : ""}" type="button" data-action="set-category" data-category="all">
+          <span>전체</span><small>${state.vendors.length}</small>
+        </button>
+        ${state.categories.map((category) => {
+          const count = state.vendors.filter((vendor) => vendor.categoryId === category.id).length;
+          return `<button class="category-chip ${state.selectedCategory === category.id ? "active" : ""}" style="--category-color:${safeColor(category.color)}" type="button" data-action="set-category" data-category="${escapeHtml(category.id)}"><span>${escapeHtml(category.name)}</span><small>${count}</small></button>`;
+        }).join("")}
+      </div>
+      <div class="vendor-results"><strong data-vendor-result-count>${filteredVendors().length}</strong><span>개의 레퍼런스</span></div>
+      <div class="vendor-feed">${renderVendorFeed()}</div>
+    </section>
+  `;
+}
+
+function renderVendorFeed() {
+  const vendors = filteredVendors();
+  if (!vendors.length) {
+    return `
+      <div class="empty-state">
+        ${icon("images")}
+        <strong>표시할 업체가 없습니다</strong>
+        <p>검색어나 카테고리를 바꾸거나 새 업체를 등록하세요.</p>
+        <button class="secondary" type="button" data-action="new-vendor">${icon("plus")} 업체 등록</button>
+      </div>
+    `;
+  }
+  return vendors.map(renderVendorCard).join("");
+}
+
+function renderVendorCard(vendor) {
+  const category = categoryFor(vendor.categoryId);
+  const photoCount = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id)).length;
+  return `
+    <article class="vendor-card" style="--category-color:${safeColor(category.color)}">
+      <div class="vendor-media-wrap">
+        <button class="vendor-media" type="button" data-action="open-vendor" data-vendor="${vendor.id}" aria-label="${escapeHtml(vendor.name)} 상세 보기">
+          ${renderVendorMedia(vendor)}
+        </button>
+        <span class="vendor-status">${escapeHtml(vendor.status || "관심")}</span>
+        ${photoCount ? `<span class="photo-count">${icon("images")} ${photoCount}</span>` : ""}
+        <button class="favorite-button ${vendor.favorite ? "active" : ""}" type="button" data-action="toggle-favorite" data-vendor="${vendor.id}" aria-label="즐겨찾기" title="즐겨찾기">${icon("heart")}</button>
+      </div>
+      <button class="vendor-card-copy" type="button" data-action="open-vendor" data-vendor="${vendor.id}">
+        <span class="vendor-card-meta"><span>${escapeHtml(category.name)}</span>${vendor.sample ? `<em>샘플</em>` : ""}</span>
+        <strong>${escapeHtml(vendor.name)}</strong>
+        <small>${escapeHtml(vendor.price || "가격 정보 없음")}</small>
+      </button>
+    </article>
+  `;
+}
+
+function renderVendorMedia(vendor, extraClass = "") {
+  const photoId = (vendor.photoIds || []).find((id) => state.photoUrls.has(id));
+  const category = categoryFor(vendor.categoryId);
+  if (photoId) {
+    return `<img class="vendor-photo ${extraClass}" src="${state.photoUrls.get(photoId)}" alt="${escapeHtml(vendor.name)} 샘플" />`;
+  }
+  return `
+    <span class="vendor-placeholder ${extraClass}" style="--category-color:${safeColor(category.color)}">
+      ${icon(category.icon || "camera")}
+      <strong>${escapeHtml(category.name)}</strong>
+      <small>사진을 등록하세요</small>
+    </span>
+  `;
+}
+
+function renderVendorDetail() {
+  const vendor = vendorFor(state.selectedVendorId);
+  if (!vendor) return "";
+  const category = categoryFor(vendor.categoryId);
+  const photoIds = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id));
+  const index = Math.min(state.selectedVendorPhotoIndex, Math.max(photoIds.length - 1, 0));
+  const photoId = photoIds[index];
+  const website = safeUrl(vendor.website);
+  return `
+    <div class="modal-backdrop" data-action="close-vendor-detail"></div>
+    <section class="modal-sheet vendor-detail" role="dialog" aria-modal="true" aria-label="업체 상세">
+      <header class="modal-header">
+        <div><span class="modal-kicker">${escapeHtml(category.name)}</span><strong>${escapeHtml(vendor.name)}</strong></div>
+        <button class="icon-button" type="button" data-action="close-vendor-detail" aria-label="닫기" title="닫기">${icon("x")}</button>
+      </header>
+      <div class="detail-scroll">
+        <div class="detail-gallery" style="--category-color:${safeColor(category.color)}">
+          <div class="detail-main-photo">
+            ${photoId ? `<img src="${state.photoUrls.get(photoId)}" alt="${escapeHtml(vendor.name)} 사진 ${index + 1}" />` : renderVendorMedia(vendor, "detail-placeholder")}
+            ${photoIds.length > 1 ? `
+              <button class="gallery-arrow prev" type="button" data-action="vendor-photo-prev" aria-label="이전 사진">${icon("chevron-left")}</button>
+              <button class="gallery-arrow next" type="button" data-action="vendor-photo-next" aria-label="다음 사진">${icon("chevron-right")}</button>
+              <span class="gallery-count">${index + 1} / ${photoIds.length}</span>
+            ` : ""}
+          </div>
+          ${photoIds.length > 1 ? `<div class="thumbnail-strip">${photoIds.map((id, photoIndex) => `<button class="${photoIndex === index ? "active" : ""}" type="button" data-action="select-vendor-photo" data-index="${photoIndex}"><img src="${state.photoUrls.get(id)}" alt="" /></button>`).join("")}</div>` : ""}
+        </div>
+        <div class="detail-content">
+          <div class="detail-title-row">
+            <div><span class="status-tag">${escapeHtml(vendor.status || "관심")}</span><h2>${escapeHtml(vendor.name)}</h2></div>
+            <button class="favorite-button detail-favorite ${vendor.favorite ? "active" : ""}" type="button" data-action="toggle-favorite" data-vendor="${vendor.id}" aria-label="즐겨찾기">${icon("heart")}</button>
+          </div>
+          ${vendor.description ? `<p class="detail-description">${escapeHtml(vendor.description)}</p>` : ""}
+          ${(vendor.tags || []).length ? `<div class="tag-list">${vendor.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+          <dl class="info-list">
+            <div><dt>${icon("wallet-cards")} 가격</dt><dd>${escapeHtml(vendor.price || "미입력")}</dd></div>
+            <div><dt>${icon("phone")} 연락처</dt><dd>${escapeHtml(vendor.contact || "미입력")}</dd></div>
+            <div><dt>${icon("map-pin")} 위치</dt><dd>${escapeHtml(vendor.address || "미입력")}</dd></div>
+            <div><dt>${icon("instagram")} 인스타그램</dt><dd>${escapeHtml(vendor.instagram || "미입력")}</dd></div>
+            ${website ? `<div><dt>${icon("globe-2")} 웹사이트</dt><dd><a href="${escapeHtml(website)}" target="_blank" rel="noreferrer">사이트 열기 ${icon("arrow-up-right")}</a></dd></div>` : ""}
+          </dl>
+          <section class="detail-note-block"><h3>${icon("file-text")} 계약 조건</h3><p>${escapeHtml(vendor.contractTerms || "등록된 계약 조건이 없습니다.")}</p></section>
+          ${vendor.plannerNotes ? `<section class="detail-note-block planner-note"><h3>${icon("notebook-pen")} 플래너 메모</h3><p>${escapeHtml(vendor.plannerNotes)}</p></section>` : ""}
+        </div>
+      </div>
+      <footer class="modal-actions">
+        <button class="secondary danger-text" type="button" data-action="delete-vendor" data-vendor="${vendor.id}" aria-label="업체 삭제">${icon("trash-2")}</button>
+        <button class="secondary" type="button" data-action="edit-vendor" data-vendor="${vendor.id}">${icon("pencil")} 편집</button>
+        <button class="primary grow" type="button" data-action="open-presentation" data-vendor="${vendor.id}">${icon("monitor-up")} 고객에게 보여주기</button>
+      </footer>
+    </section>
+  `;
+}
+
+function renderVendorEditor() {
+  const isNew = state.editingVendorId === "new";
+  const vendor = isNew ? {
+    name: "", categoryId: state.selectedCategory === "all" ? state.categories[0]?.id : state.selectedCategory,
+    status: "관심", price: "", description: "", contact: "", address: "", instagram: "", website: "",
+    contractTerms: "", plannerNotes: "", tags: [], photoIds: []
+  } : vendorFor(state.editingVendorId);
+  if (!vendor) return "";
+  const existingPhotos = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id));
+  return `
+    <div class="modal-backdrop" data-action="close-vendor-editor"></div>
+    <form class="modal-sheet vendor-editor" data-action="save-vendor" role="dialog" aria-modal="true">
+      <header class="modal-header">
+        <div><span class="modal-kicker">Planner Library</span><strong>${isNew ? "새 업체 등록" : "업체 정보 편집"}</strong></div>
+        <button class="icon-button" type="button" data-action="close-vendor-editor" aria-label="닫기">${icon("x")}</button>
+      </header>
+      <div class="editor-scroll">
+        <section class="photo-uploader">
+          <div class="editor-section-title"><strong>샘플 사진</strong><span>최대 20장 · 자동 최적화</span></div>
+          ${existingPhotos.length ? `<div class="existing-photo-grid">${existingPhotos.map((id) => `<label class="existing-photo"><img src="${state.photoUrls.get(id)}" alt="" /><input type="checkbox" name="removePhoto" value="${id}" /><span>${icon("trash-2")} 삭제</span></label>`).join("")}</div>` : ""}
+          <label class="upload-dropzone">
+            ${icon("image-plus")}
+            <strong>사진 추가</strong>
+            <span>여러 장을 한 번에 선택할 수 있습니다</span>
+            <input data-action="vendor-photos" name="photos" type="file" accept="image/*" multiple />
+          </label>
+          <div class="pending-photo-preview" aria-live="polite"></div>
+        </section>
+        <section class="editor-fields">
+          <div class="field-grid two-cols">
+            <label>업체명<input name="name" value="${escapeHtml(vendor.name)}" placeholder="업체명" required /></label>
+            <label>카테고리<select name="categoryId" required>${state.categories.map((category) => `<option value="${escapeHtml(category.id)}" ${category.id === vendor.categoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}</select></label>
+          </div>
+          <div class="field-grid two-cols">
+            <label>진행 상태<select name="status">${vendorStatuses.map((status) => `<option ${status === vendor.status ? "selected" : ""}>${status}</option>`).join("")}</select></label>
+            <label>가격 정보<input name="price" value="${escapeHtml(vendor.price)}" placeholder="예: 본식 280만원부터" /></label>
+          </div>
+          <label>한 줄 소개<textarea name="description" rows="3" placeholder="업체의 분위기와 강점을 적어주세요">${escapeHtml(vendor.description)}</textarea></label>
+          <div class="field-grid two-cols">
+            <label>연락처<input name="contact" value="${escapeHtml(vendor.contact)}" placeholder="02-0000-0000" /></label>
+            <label>인스타그램<input name="instagram" value="${escapeHtml(vendor.instagram)}" placeholder="@account" /></label>
+          </div>
+          <label>주소<input name="address" value="${escapeHtml(vendor.address)}" placeholder="주소 또는 상담 장소" /></label>
+          <label>웹사이트<input name="website" type="url" value="${escapeHtml(vendor.website)}" placeholder="https://" /></label>
+          <label>태그<input name="tags" value="${escapeHtml((vendor.tags || []).join(", "))}" placeholder="실크, 채광, 단독홀" /></label>
+          <label>계약 조건<textarea name="contractTerms" rows="4" placeholder="계약금, 취소·변경, 포함 항목 등을 적어주세요">${escapeHtml(vendor.contractTerms)}</textarea></label>
+          <label>플래너 메모<textarea name="plannerNotes" rows="4" placeholder="상담 시에만 확인할 메모">${escapeHtml(vendor.plannerNotes)}</textarea></label>
+        </section>
+      </div>
+      <footer class="modal-actions"><button class="secondary" type="button" data-action="close-vendor-editor">취소</button><button class="primary grow" type="submit">${icon("save")} 저장</button></footer>
+    </form>
+  `;
+}
+
+function renderCategoryManager() {
+  return `
+    <div class="modal-backdrop" data-action="close-category-manager"></div>
+    <section class="modal-sheet compact-modal" role="dialog" aria-modal="true" aria-label="카테고리 관리">
+      <header class="modal-header"><div><span class="modal-kicker">Library Settings</span><strong>카테고리 관리</strong></div><button class="icon-button" type="button" data-action="close-category-manager" aria-label="닫기">${icon("x")}</button></header>
+      <div class="category-manager-list">
+        ${state.categories.map((category) => {
+          const count = state.vendors.filter((vendor) => vendor.categoryId === category.id).length;
+          return `<div class="category-manager-row"><span class="color-swatch" style="background:${safeColor(category.color)}"></span><strong>${escapeHtml(category.name)}</strong><small>${count}곳</small><button class="icon-button" type="button" data-action="delete-category" data-category="${escapeHtml(category.id)}" ${category.locked || count ? "disabled" : ""} aria-label="카테고리 삭제">${icon("trash-2")}</button></div>`;
+        }).join("")}
+      </div>
+      <form class="category-add-form" data-action="add-category">
+        <label>새 카테고리<input name="name" placeholder="예: 청첩장" required /></label>
+        <label>색상<input name="color" type="color" value="#5f7094" aria-label="카테고리 색상" /></label>
+        <button class="primary" type="submit">${icon("plus")} 추가</button>
+      </form>
+    </section>
+  `;
+}
+
+function renderPresentation() {
+  const vendor = vendorFor(state.presentationVendorId);
+  if (!vendor) return "";
+  const category = categoryFor(vendor.categoryId);
+  const photos = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id));
+  const index = Math.min(state.presentationPhotoIndex, Math.max(photos.length - 1, 0));
+  return `
+    <section class="presentation" role="dialog" aria-modal="true" aria-label="고객 프레젠테이션">
+      <header class="presentation-header">
+        <div><span>${escapeHtml(category.name)}</span><strong>${escapeHtml(vendor.name)}</strong></div>
+        <button class="presentation-close" type="button" data-action="close-presentation" aria-label="닫기">${icon("x")}</button>
+      </header>
+      <div class="presentation-stage" style="--category-color:${safeColor(category.color)}">
+        ${photos.length ? `<img src="${state.photoUrls.get(photos[index])}" alt="${escapeHtml(vendor.name)} 레퍼런스 ${index + 1}" />` : renderVendorMedia(vendor, "presentation-placeholder")}
+        ${photos.length > 1 ? `<button class="presentation-arrow prev" type="button" data-action="presentation-prev" aria-label="이전 사진">${icon("chevron-left")}</button><button class="presentation-arrow next" type="button" data-action="presentation-next" aria-label="다음 사진">${icon("chevron-right")}</button>` : ""}
+      </div>
+      <footer class="presentation-footer">
+        <div><strong>${escapeHtml(vendor.price || "가격 협의")}</strong><span>${escapeHtml(vendor.description || vendor.contractTerms || "")}</span></div>
+        <span>${photos.length ? `${index + 1} / ${photos.length}` : "사진 준비 중"}</span>
+      </footer>
+    </section>
+  `;
+}
+
+function renderManageView() {
+  return `
+    <section class="view manage-view">
+      <header class="view-heading">
+        <div><div class="eyebrow">Back Office</div><h1>플래너 관리</h1><p>이 기기에 저장된 웨딩 데이터</p></div>
+      </header>
+      <div class="stat-strip">
+        <div><strong>${state.vendors.length}</strong><span>업체</span></div>
+        <div><strong>${state.photoRecords.size}</strong><span>사진</span></div>
+        <div><strong>${state.members.length}</strong><span>계정</span></div>
+        <div><strong>${state.dayNotes.size}</strong><span>일정</span></div>
+      </div>
+      <section class="manage-section">
+        <div class="section-title-row"><div><div class="eyebrow">Wedding Profile</div><h2>웨딩 기본 정보</h2></div></div>
+        <form class="field-grid" data-action="save-wedding">
+          <div class="field-grid two-cols"><label>신랑 이름<input name="groomName" value="${escapeHtml(state.wedding?.groomName || "")}" required /></label><label>신부 이름<input name="brideName" value="${escapeHtml(state.wedding?.brideName || "")}" required /></label></div>
+          <div class="field-grid two-cols"><label>예식일<input name="weddingDate" type="date" value="${escapeHtml(state.wedding?.weddingDate || "")}" required /></label><label>플래너명<input name="plannerName" value="${escapeHtml(state.wedding?.plannerName || "")}" /></label></div>
+          <div class="form-submit-row"><button class="primary" type="submit">${icon("save")} 정보 저장</button></div>
+        </form>
+      </section>
+      <section class="manage-section">
+        <div class="section-title-row"><div><div class="eyebrow">Members</div><h2>로그인 계정</h2></div><span>${state.members.length}명</span></div>
+        <div class="member-list">
+          ${state.members.map((member) => `<div class="member-row"><span class="member-avatar">${escapeHtml((member.displayName || member.loginId || "?").slice(0, 1))}</span><span><strong>${escapeHtml(member.displayName || member.loginId)}</strong><small>${escapeHtml(member.loginId)} · ${escapeHtml(roleLabels[member.role])}</small></span>${member.role !== "planner" ? `<button class="icon-button" type="button" data-action="delete-member" data-member="${member.id}" aria-label="계정 삭제">${icon("trash-2")}</button>` : `<span class="owner-label">OWNER</span>`}</div>`).join("")}
+        </div>
+        <form class="account-form" data-action="create-account">
+          <h3>${icon("user-plus")} 신랑·신부 계정 발급</h3>
+          <div class="field-grid two-cols"><label>역할<select name="role"><option value="groom">신랑</option><option value="bride">신부</option></select></label><label>이름<input name="displayName" required /></label></div>
+          <div class="field-grid two-cols"><label>로그인 아이디<input name="loginId" required /></label><label>임시 비밀번호<span class="input-with-action"><input name="password" value="${generatePassword()}" required /><button class="icon-button" type="button" data-action="regen-password" aria-label="비밀번호 새로 만들기">${icon("refresh-cw")}</button></span></label></div>
+          <div class="form-submit-row"><button class="secondary" type="submit">계정 발급</button></div>
+        </form>
+      </section>
+      <section class="manage-section">
+        <div class="section-title-row"><div><div class="eyebrow">Security</div><h2>내 비밀번호</h2></div></div>
+        <form class="inline-form" data-action="change-password"><label>새 비밀번호<input name="password" type="password" minlength="4" required /></label><button class="secondary" type="submit">변경</button></form>
+      </section>
+      <section class="manage-section data-section">
+        <div class="section-title-row"><div><div class="eyebrow">Data</div><h2>데이터 백업</h2></div>${icon("database")}</div>
+        <p>업체 정보와 사진, 일정, 계정을 하나의 백업 파일로 보관합니다.</p>
+        <div class="data-actions"><button class="secondary" type="button" data-action="export-data">${icon("download")} 전체 백업</button><button class="secondary" type="button" data-action="import-data">${icon("upload")} 백업 복원</button><input class="visually-hidden" type="file" accept="application/json" data-action="data-import-file" /></div>
+      </section>
+    </section>
+  `;
+}
+
+function renderDayEditor() {
+  const note = state.dayNotes.get(state.selectedDate);
+  const readonly = !plannerMode();
+  return `
+    <div class="modal-backdrop" data-action="close-day-editor"></div>
+    <form class="modal-sheet compact-modal day-editor" data-action="save-day" role="dialog" aria-modal="true">
+      <header class="modal-header"><div><span class="modal-kicker">${escapeHtml(formatDateLong(state.selectedDate))}</span><strong>일정 메모</strong></div><button class="icon-button" type="button" data-action="close-day-editor" aria-label="닫기">${icon("x")}</button></header>
+      <div class="editor-fields"><label>제목<input name="title" value="${escapeHtml(note?.title || "")}" ${readonly ? "readonly" : ""} placeholder="일정 제목" /></label><label>메모<textarea name="text" rows="5" ${readonly ? "readonly" : ""} placeholder="세부 내용을 적어주세요">${escapeHtml(note?.text || "")}</textarea></label></div>
+      ${readonly ? "" : `<footer class="modal-actions"><button class="secondary danger-text" type="button" data-action="delete-day" ${note ? "" : "disabled"}>${icon("trash-2")} 삭제</button><button class="primary grow" type="submit">${icon("save")} 저장</button></footer>`}
+    </form>
+  `;
+}
+
 function renderPrintSheet() {
+  if (!state.authUser) return;
   const todayKey = dateKey(new Date());
   printRoot.innerHTML = `
     <section class="print-sheet">
-      <div class="print-title">
-        <div>WEDDING CALENDAR</div>
-        <div>${escapeHtml(state.wedding?.weddingDate?.slice(0, 4) || new Date().getFullYear())}년</div>
-      </div>
-      <div style="text-align:right;font-size:10px;margin-top:-5mm;margin-bottom:5mm;">
-        담당플래너: ${escapeHtml(state.wedding?.plannerName || "")}
-      </div>
+      <div class="print-title"><div>WEDDING CALENDAR</div><div>${escapeHtml(state.wedding?.weddingDate?.slice(0, 4) || new Date().getFullYear())}년</div></div>
+      <div class="print-owner">${escapeHtml(state.wedding?.groomName || "신랑")} · ${escapeHtml(state.wedding?.brideName || "신부")} &nbsp; 담당플래너: ${escapeHtml(state.wedding?.plannerName || "")}</div>
       <div class="print-grid">
-        ${monthsFromToday().map((month) => {
-          return `
-            <article class="print-month">
-              <div class="print-month-head">
-                <h3>${month.getMonth() + 1}</h3>
-                <div class="print-weekdays">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
-              </div>
-              <div class="print-week-rows">
-                ${getMonthRows(month).map((row) => {
-                  const value = state.weekNotes.get(row.key)?.text || "";
-                  return `
-                    <div class="print-week-row">
-                      <div class="print-week-days">
-                        ${row.days.map((date) => {
-                          if (!date) return `<span class="print-day"></span>`;
-                          const key = dateKey(date);
-                          const classes = ["print-day"];
-                          if (key === todayKey) classes.push("today");
-                          if (state.dayNotes.has(key)) classes.push("has-note");
-                          return `<span class="${classes.join(" ")}">${date.getDate()}</span>`;
-                        }).join("")}
-                      </div>
-                      <div class="print-line">${escapeHtml(value)}</div>
-                    </div>
-                  `;
-                }).join("")}
-              </div>
-            </article>
-          `;
-        }).join("")}
+        ${monthsFromToday().map((month) => `
+          <article class="print-month">
+            <div class="print-month-head"><h3>${month.getMonth() + 1}</h3><div class="print-weekdays">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div></div>
+            <div class="print-week-rows">
+              ${getMonthRows(month).map((row) => `<div class="print-week-row"><div class="print-week-days">${row.days.map((date) => {
+                if (!date) return `<span class="print-day"></span>`;
+                const key = dateKey(date);
+                return `<span class="print-day ${key === todayKey ? "today" : ""} ${state.dayNotes.has(key) ? "has-note" : ""}">${date.getDate()}</span>`;
+              }).join("")}</div><div class="print-line">${escapeHtml(state.weekNotes.get(row.key)?.text || "")}</div></div>`).join("")}
+            </div>
+          </article>
+        `).join("")}
       </div>
     </section>
   `;
@@ -429,14 +934,18 @@ function renderPrintSheet() {
 
 function render() {
   if (state.loading) {
-    appRoot.innerHTML = `<section class="login"><div class="login-panel"><p class="muted">불러오는 중...</p></div></section>`;
-    return;
-  }
-  if (!state.authUser) {
+    appRoot.innerHTML = `<section class="loading-screen"><span class="brand-mark">M</span><p>불러오는 중</p></section>`;
+  } else if (!state.authUser) {
     renderLogin();
-    return;
+  } else {
+    renderApp();
   }
-  renderApp();
+  activateIcons();
+}
+
+function showLoginError(message) {
+  state.error = message;
+  render();
 }
 
 function generatePassword() {
@@ -446,78 +955,69 @@ function generatePassword() {
 async function handleLogin(form) {
   state.error = "";
   const formData = new FormData(form);
-  const loginId = formData.get("loginId");
-  const password = formData.get("password");
-  if (!loginUser(loginId, password)) {
-    showError("아이디 또는 비밀번호를 확인하세요. 최초 로그인은 admin / admin 입니다.");
+  if (!await loginUser(formData.get("loginId"), formData.get("password"))) {
+    showLoginError("아이디 또는 비밀번호를 확인하세요. 최초 로그인은 admin / admin 입니다.");
   }
 }
 
 function handleSaveWedding(form) {
   const data = Object.fromEntries(new FormData(form));
   const store = readStore();
-  store.weddings[state.profile.weddingId] = {
-    ...store.weddings[state.profile.weddingId],
-    groomName: data.groomName,
-    brideName: data.brideName,
-    weddingDate: data.weddingDate,
-    plannerName: data.plannerName
-  };
-  store.users[state.wedding.plannerUid || adminId].displayName = data.plannerName || "관리자";
-  store.members[state.profile.weddingId][state.wedding.plannerUid || adminId].displayName = data.plannerName || "관리자";
+  const currentWeddingId = state.profile.weddingId;
+  store.weddings[currentWeddingId] = { ...store.weddings[currentWeddingId], groomName: data.groomName, brideName: data.brideName, weddingDate: data.weddingDate, plannerName: data.plannerName };
+  const plannerUid = state.wedding.plannerUid || adminId;
+  if (store.users[plannerUid]) store.users[plannerUid].displayName = data.plannerName || "관리자";
+  if (store.members[currentWeddingId]?.[plannerUid]) store.members[currentWeddingId][plannerUid].displayName = data.plannerName || "관리자";
   writeStore(store);
   setSession(state.authUser.uid);
   render();
+  notify("웨딩 정보가 저장되었습니다.");
 }
 
 function handleCreateAccount(form) {
   const data = Object.fromEntries(new FormData(form));
   const loginId = String(data.loginId || "").trim();
   const store = readStore();
-  const duplicate = Object.values(store.users).some((user) => user.loginId === loginId);
-  if (duplicate) throw new Error("이미 사용 중인 로그인 아이디입니다.");
-
+  if (Object.values(store.users).some((user) => user.loginId === loginId)) throw new Error("이미 사용 중인 로그인 아이디입니다.");
   const userId = `user-${crypto.randomUUID()}`;
-  store.users[userId] = {
-    id: userId,
-    loginId,
-    password: data.password,
-    weddingId: state.profile.weddingId,
-    role: data.role,
-    displayName: data.displayName
-  };
-  store.members[state.profile.weddingId] = {
-    ...(store.members[state.profile.weddingId] || {}),
-    [userId]: {
-      role: data.role,
-      displayName: data.displayName,
-      loginId
-    }
-  };
+  store.users[userId] = { id: userId, loginId, password: data.password, weddingId: state.profile.weddingId, role: data.role, displayName: data.displayName };
+  store.members[state.profile.weddingId] = { ...(store.members[state.profile.weddingId] || {}), [userId]: { role: data.role, displayName: data.displayName, loginId } };
   writeStore(store);
   setSession(state.authUser.uid);
-  alert(`${roleLabels[data.role]} 계정이 발급되었습니다.\n아이디: ${loginId}\n임시 비밀번호: ${data.password}`);
-  form.reset();
-  form.querySelector('[name="password"]').value = generatePassword();
   render();
+  alert(`${roleLabels[data.role]} 계정이 발급되었습니다.\n아이디: ${loginId}\n임시 비밀번호: ${data.password}`);
+}
+
+function handleDeleteMember(memberId) {
+  const member = state.members.find((item) => item.id === memberId);
+  if (!member || member.role === "planner" || !confirm(`${member.displayName || member.loginId} 계정을 삭제할까요?`)) return;
+  const store = readStore();
+  delete store.users[memberId];
+  delete store.members[state.profile.weddingId]?.[memberId];
+  writeStore(store);
+  setSession(state.authUser.uid);
+  render();
+  notify("계정이 삭제되었습니다.");
+}
+
+function handleChangePassword(form) {
+  const password = String(new FormData(form).get("password") || "");
+  const store = readStore();
+  store.users[state.authUser.uid].password = password;
+  writeStore(store);
+  form.reset();
+  notify("비밀번호가 변경되었습니다.");
 }
 
 function handleSaveDay(form) {
   const data = Object.fromEntries(new FormData(form));
   const store = readStore();
-  store.dayNotes[state.profile.weddingId] = {
-    ...(store.dayNotes[state.profile.weddingId] || {}),
-    [state.selectedDate]: {
-      title: data.title,
-      text: data.text,
-      date: state.selectedDate,
-      updatedBy: state.authUser.uid
-    }
-  };
+  store.dayNotes[state.profile.weddingId] = { ...(store.dayNotes[state.profile.weddingId] || {}), [state.selectedDate]: { title: data.title, text: data.text, date: state.selectedDate, updatedBy: state.authUser.uid } };
   writeStore(store);
   state.selectedDate = null;
   setSession(state.authUser.uid);
   render();
+  notify("일정이 저장되었습니다.");
 }
 
 function handleDeleteDay() {
@@ -527,6 +1027,7 @@ function handleDeleteDay() {
   state.selectedDate = null;
   setSession(state.authUser.uid);
   render();
+  notify("일정이 삭제되었습니다.");
 }
 
 function queueWeekSave(textarea) {
@@ -534,22 +1035,231 @@ function queueWeekSave(textarea) {
   weekTimer = setTimeout(() => {
     const key = textarea.dataset.week;
     const store = readStore();
-    store.weekNotes[state.profile.weddingId] = {
-      ...(store.weekNotes[state.profile.weddingId] || {}),
-      [key]: {
-        text: textarea.value,
-        weekStart: key,
-        updatedBy: state.authUser.uid
-      }
+    store.weekNotes[state.profile.weddingId] = { ...(store.weekNotes[state.profile.weddingId] || {}), [key]: { text: textarea.value, weekStart: key, updatedBy: state.authUser.uid } };
+    writeStore(store);
+    state.weekNotes.set(key, { id: key, text: textarea.value, weekStart: key, updatedBy: state.authUser.uid });
+  }, 450);
+}
+
+async function loadImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    return await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("이미지를 읽을 수 없습니다."));
+      image.src = url;
+    });
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+async function compressPhoto(file) {
+  if (!file.type.startsWith("image/")) throw new Error("이미지 파일만 등록할 수 있습니다.");
+  const image = await loadImage(file);
+  const maxEdge = 1600;
+  const ratio = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("사진 변환에 실패했습니다.")), "image/jpeg", 0.84));
+}
+
+async function handleSaveVendor(form) {
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.innerHTML = `${icon("loader-circle", "spin")} 저장 중`;
+  activateIcons();
+  const formData = new FormData(form);
+  const isNew = state.editingVendorId === "new";
+  const existing = isNew ? null : vendorFor(state.editingVendorId);
+  const vendorId = existing?.id || `vendor-${crypto.randomUUID()}`;
+  const removeIds = formData.getAll("removePhoto");
+  const files = [...(form.querySelector('[name="photos"]')?.files || [])];
+  const retainedPhotoIds = (existing?.photoIds || []).filter((id) => !removeIds.includes(id));
+  if (retainedPhotoIds.length + files.length > 20) throw new Error("업체당 사진은 최대 20장까지 등록할 수 있습니다.");
+  const createdIds = [];
+  try {
+    for (const file of files) {
+      const id = `photo-${crypto.randomUUID()}`;
+      const blob = await compressPhoto(file);
+      await putPhotoRecord({ id, weddingId: state.profile.weddingId, vendorId, blob, name: file.name, createdAt: new Date().toISOString() });
+      createdIds.push(id);
+    }
+    const store = readStore();
+    const now = new Date().toISOString();
+    const tags = String(formData.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean).slice(0, 12);
+    store.vendors[state.profile.weddingId] = store.vendors[state.profile.weddingId] || {};
+    store.vendors[state.profile.weddingId][vendorId] = {
+      ...existing,
+      id: vendorId,
+      name: String(formData.get("name") || "").trim(),
+      categoryId: formData.get("categoryId"),
+      status: formData.get("status"),
+      price: String(formData.get("price") || "").trim(),
+      description: String(formData.get("description") || "").trim(),
+      contact: String(formData.get("contact") || "").trim(),
+      address: String(formData.get("address") || "").trim(),
+      instagram: String(formData.get("instagram") || "").trim(),
+      website: String(formData.get("website") || "").trim(),
+      contractTerms: String(formData.get("contractTerms") || "").trim(),
+      plannerNotes: String(formData.get("plannerNotes") || "").trim(),
+      tags,
+      photoIds: [...retainedPhotoIds, ...createdIds],
+      favorite: existing?.favorite || false,
+      sample: false,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
     };
     writeStore(store);
-    state.weekNotes.set(key, {
-      id: key,
-      text: textarea.value,
-      weekStart: key,
-      updatedBy: state.authUser.uid
-    });
-  }, 500);
+    for (const id of removeIds) await deletePhotoRecord(id).catch(() => {});
+    clearPendingPhotoUrls();
+    state.editingVendorId = null;
+    state.selectedVendorId = vendorId;
+    state.selectedVendorPhotoIndex = 0;
+    setSession(state.authUser.uid);
+    await hydratePhotoLibrary();
+    render();
+    notify(isNew ? "업체가 등록되었습니다." : "업체 정보가 저장되었습니다.");
+  } catch (error) {
+    for (const id of createdIds) await deletePhotoRecord(id).catch(() => {});
+    throw error;
+  }
+}
+
+async function handleDeleteVendor(vendorId) {
+  const vendor = vendorFor(vendorId);
+  if (!vendor || !confirm(`${vendor.name} 업체와 등록 사진을 모두 삭제할까요?`)) return;
+  for (const id of vendor.photoIds || []) await deletePhotoRecord(id);
+  const store = readStore();
+  delete store.vendors[state.profile.weddingId]?.[vendorId];
+  writeStore(store);
+  state.selectedVendorId = null;
+  setSession(state.authUser.uid);
+  await hydratePhotoLibrary();
+  render();
+  notify("업체가 삭제되었습니다.");
+}
+
+function toggleFavorite(vendorId) {
+  const store = readStore();
+  const vendor = store.vendors[state.profile.weddingId]?.[vendorId];
+  if (!vendor) return;
+  vendor.favorite = !vendor.favorite;
+  vendor.updatedAt = new Date().toISOString();
+  writeStore(store);
+  setSession(state.authUser.uid);
+  render();
+}
+
+function handleAddCategory(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const name = String(data.name || "").trim();
+  const store = readStore();
+  if (state.categories.some((category) => category.name === name)) throw new Error("같은 이름의 카테고리가 있습니다.");
+  store.categories[state.profile.weddingId].push({ id: `category-${crypto.randomUUID()}`, name, color: safeColor(data.color), icon: "folder" });
+  writeStore(store);
+  setSession(state.authUser.uid);
+  render();
+  notify("카테고리가 추가되었습니다.");
+}
+
+function handleDeleteCategory(categoryId) {
+  const category = categoryFor(categoryId);
+  const count = state.vendors.filter((vendor) => vendor.categoryId === categoryId).length;
+  if (category.locked || count || !confirm(`${category.name} 카테고리를 삭제할까요?`)) return;
+  const store = readStore();
+  store.categories[state.profile.weddingId] = store.categories[state.profile.weddingId].filter((item) => item.id !== categoryId);
+  writeStore(store);
+  if (state.selectedCategory === categoryId) state.selectedCategory = "all";
+  setSession(state.authUser.uid);
+  render();
+}
+
+function clearPendingPhotoUrls() {
+  state.pendingPhotoUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.pendingPhotoUrls = [];
+}
+
+function previewSelectedPhotos(input) {
+  clearPendingPhotoUrls();
+  const files = [...input.files].slice(0, 20);
+  const container = input.closest(".photo-uploader").querySelector(".pending-photo-preview");
+  state.pendingPhotoUrls = files.map((file) => URL.createObjectURL(file));
+  container.innerHTML = state.pendingPhotoUrls.map((url, index) => `<span><img src="${url}" alt="추가할 사진 ${index + 1}" /></span>`).join("");
+}
+
+function updateVendorFeed() {
+  const feed = document.querySelector(".vendor-feed");
+  const count = document.querySelector("[data-vendor-result-count]");
+  if (!feed || !count) return;
+  feed.innerHTML = renderVendorFeed();
+  count.textContent = filteredVendors().length;
+  activateIcons();
+}
+
+function moveVendorPhoto(direction) {
+  const vendor = vendorFor(state.selectedVendorId);
+  const count = (vendor?.photoIds || []).filter((id) => state.photoUrls.has(id)).length;
+  if (!count) return;
+  state.selectedVendorPhotoIndex = (state.selectedVendorPhotoIndex + direction + count) % count;
+  render();
+}
+
+function movePresentationPhoto(direction) {
+  const vendor = vendorFor(state.presentationVendorId);
+  const count = (vendor?.photoIds || []).filter((id) => state.photoUrls.has(id)).length;
+  if (!count) return;
+  state.presentationPhotoIndex = (state.presentationPhotoIndex + direction + count) % count;
+  render();
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function exportAllData() {
+  const records = await getAllPhotoRecords();
+  const photos = [];
+  for (const record of records) {
+    photos.push({ ...record, blob: undefined, dataUrl: await blobToDataUrl(record.blob) });
+  }
+  const payload = { app: "Marryday Planner", version: 2, exportedAt: new Date().toISOString(), store: readStore(), photos };
+  const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `marryday-backup-${dateKey(new Date())}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  notify("전체 데이터 백업을 만들었습니다.");
+}
+
+async function importAllData(file) {
+  const payload = JSON.parse(await file.text());
+  if (!payload?.store?.users || !payload?.store?.weddings || !Array.isArray(payload.photos || [])) throw new Error("Marryday 백업 파일 형식이 아닙니다.");
+  if (!confirm("현재 데이터를 백업 파일의 내용으로 교체할까요?")) return;
+  writeStore(payload.store);
+  await clearPhotoRecords();
+  for (const photo of payload.photos) {
+    if (!photo.dataUrl || !photo.id) continue;
+    const blob = await fetch(photo.dataUrl).then((response) => response.blob());
+    await putPhotoRecord({ id: photo.id, weddingId: photo.weddingId, vendorId: photo.vendorId, name: photo.name || "photo.jpg", createdAt: photo.createdAt || new Date().toISOString(), blob });
+  }
+  alert("복원이 완료되었습니다. 다시 로그인해 주세요.");
+  logoutUser();
 }
 
 function buildPosterSvg() {
@@ -559,49 +1269,39 @@ function buildPosterSvg() {
   const colWidth = 342;
   const rowHeight = 300;
   const todayKey = dateKey(new Date());
-  const months = monthsFromToday();
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
-  svg += `<rect width="100%" height="100%" fill="#fffdf8"/>`;
-  svg += `<text x="${margin}" y="58" font-size="34" font-weight="800" font-family="Arial, sans-serif" fill="#22201d">WEDDING CALENDAR</text>`;
-  svg += `<text x="${width - margin}" y="58" text-anchor="end" font-size="30" font-weight="800" font-family="Arial, sans-serif" fill="#22201d">${escapeHtml(state.wedding?.weddingDate?.slice(0, 4) || new Date().getFullYear())}년</text>`;
-  svg += `<text x="${width - margin}" y="102" text-anchor="end" font-size="18" font-family="Arial, sans-serif" fill="#22201d">담당플래너: ${escapeHtml(state.wedding?.plannerName || "")}</text>`;
-  svg += `<line x1="${margin}" y1="116" x2="${width - margin}" y2="116" stroke="#c8bfb3"/>`;
-
-  months.forEach((month, index) => {
+  svg += `<rect width="100%" height="100%" fill="#ffffff"/>`;
+  svg += `<text x="${margin}" y="58" font-size="34" font-weight="800" font-family="Arial, sans-serif" fill="#171916">WEDDING CALENDAR</text>`;
+  svg += `<text x="${width - margin}" y="58" text-anchor="end" font-size="30" font-weight="800" font-family="Arial, sans-serif" fill="#171916">${escapeHtml(state.wedding?.weddingDate?.slice(0, 4) || new Date().getFullYear())}년</text>`;
+  svg += `<text x="${width - margin}" y="102" text-anchor="end" font-size="18" font-family="Arial, sans-serif" fill="#171916">${escapeHtml(state.wedding?.groomName || "신랑")} · ${escapeHtml(state.wedding?.brideName || "신부")} / ${escapeHtml(state.wedding?.plannerName || "")}</text>`;
+  svg += `<line x1="${margin}" y1="116" x2="${width - margin}" y2="116" stroke="#c9cbc6"/>`;
+  monthsFromToday().forEach((month, index) => {
     const col = index % 3;
     const row = Math.floor(index / 3);
     const x = margin + col * (colWidth + 33);
     const y = 155 + row * rowHeight;
-    svg += `<text x="${x}" y="${y}" font-size="26" font-weight="800" font-family="Arial, sans-serif" fill="#22201d">${month.getMonth() + 1}</text>`;
-    weekdays.forEach((day, dayIndex) => {
-      svg += `<text x="${x + 34 + dayIndex * 27}" y="${y}" text-anchor="middle" font-size="12" font-weight="800" font-family="Arial, sans-serif" fill="#22201d">${day}</text>`;
-    });
+    svg += `<text x="${x}" y="${y}" font-size="26" font-weight="800" font-family="Arial, sans-serif" fill="#171916">${month.getMonth() + 1}</text>`;
+    weekdays.forEach((day, dayIndex) => { svg += `<text x="${x + 34 + dayIndex * 27}" y="${y}" text-anchor="middle" font-size="12" font-weight="800" font-family="Arial, sans-serif" fill="#171916">${day}</text>`; });
     getMonthRows(month).forEach((week, weekIndex) => {
       const cy = y + 28 + weekIndex * 34;
       week.days.forEach((date, dayIndex) => {
         if (!date) return;
         const cx = x + 34 + dayIndex * 27;
         const key = dateKey(date);
-        if (key === todayKey) {
-          svg += `<circle cx="${cx}" cy="${cy - 4}" r="12" fill="#b83e4b"/>`;
-        }
-        svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="13" font-weight="${state.dayNotes.has(key) ? "800" : "500"}" font-family="Arial, sans-serif" fill="${key === todayKey ? "#ffffff" : state.dayNotes.has(key) ? "#0f8b8d" : "#22201d"}">${date.getDate()}</text>`;
+        if (key === todayKey) svg += `<circle cx="${cx}" cy="${cy - 4}" r="12" fill="#c44958"/>`;
+        svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="13" font-weight="${state.dayNotes.has(key) ? "800" : "500"}" font-family="Arial, sans-serif" fill="${key === todayKey ? "#ffffff" : state.dayNotes.has(key) ? "#167d75" : "#171916"}">${date.getDate()}</text>`;
       });
       const lineY = cy - 1;
       const text = state.weekNotes.get(week.key)?.text || "";
-      svg += `<line x1="${x + 154}" y1="${lineY}" x2="${x + colWidth}" y2="${lineY}" stroke="#aaa" stroke-dasharray="2 4"/>`;
-      if (text) {
-        svg += `<text x="${x + colWidth - 4}" y="${lineY - 5}" text-anchor="end" font-size="22" font-family="Arial, sans-serif" fill="#22201d">${escapeHtml(text)}</text>`;
-      }
+      svg += `<line x1="${x + 154}" y1="${lineY}" x2="${x + colWidth}" y2="${lineY}" stroke="#9da19a" stroke-dasharray="2 4"/>`;
+      if (text) svg += `<text x="${x + colWidth - 4}" y="${lineY - 5}" text-anchor="end" font-size="20" font-family="Arial, sans-serif" fill="#171916">${escapeHtml(text)}</text>`;
     });
   });
-  svg += `</svg>`;
-  return svg;
+  return `${svg}</svg>`;
 }
 
 async function downloadPng() {
-  const svg = buildPosterSvg();
-  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const blob = new Blob([buildPosterSvg()], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const image = new Image();
   image.decoding = "async";
@@ -609,16 +1309,20 @@ async function downloadPng() {
     const canvas = document.createElement("canvas");
     canvas.width = 1200;
     canvas.height = 1700;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#fffdf8";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(image, 0, 0);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0);
     URL.revokeObjectURL(url);
     const link = document.createElement("a");
     link.download = `wedding-calendar-${dateKey(new Date())}.png`;
     link.href = canvas.toDataURL("image/png");
+    document.body.append(link);
     link.click();
+    link.remove();
+    notify("캘린더 이미지를 만들었습니다.");
   };
+  image.onerror = () => { URL.revokeObjectURL(url); notify("이미지를 만들지 못했습니다."); };
   image.src = url;
 }
 
@@ -631,9 +1335,17 @@ document.addEventListener("submit", async (event) => {
     if (action === "login") await handleLogin(form);
     if (action === "save-wedding") handleSaveWedding(form);
     if (action === "create-account") handleCreateAccount(form);
+    if (action === "change-password") handleChangePassword(form);
     if (action === "save-day") handleSaveDay(form);
+    if (action === "save-vendor") await handleSaveVendor(form);
+    if (action === "add-category") handleAddCategory(form);
   } catch (error) {
-    showError(error.message);
+    if (form.dataset.action === "login") showLoginError(error.message);
+    else {
+      alert(error.message || "처리 중 오류가 발생했습니다.");
+      const button = form.querySelector('button[type="submit"]');
+      if (button) { button.disabled = false; button.textContent = "저장"; }
+    }
   }
 });
 
@@ -642,36 +1354,81 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (action === "logout") logoutUser();
-  if (action === "select-day") {
-    state.selectedDate = target.dataset.date;
+  if (action === "navigate") {
+    state.activeView = target.dataset.view;
+    state.selectedVendorId = null;
     render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
-  if (action === "close-editor") {
-    state.selectedDate = null;
-    render();
-  }
+  if (action === "select-day") { state.selectedDate = target.dataset.date; render(); }
+  if (action === "close-day-editor") { state.selectedDate = null; render(); }
   if (action === "delete-day") handleDeleteDay();
-  if (action === "regen-password") {
-    target.closest("form").querySelector('[name="password"]').value = generatePassword();
-  }
-  if (action === "print") {
-    renderPrintSheet();
-    window.print();
-  }
+  if (action === "regen-password") target.closest("form").querySelector('[name="password"]').value = generatePassword();
+  if (action === "print") { renderPrintSheet(); window.print(); }
   if (action === "png") await downloadPng();
+  if (action === "set-category") { state.selectedCategory = target.dataset.category; render(); }
+  if (action === "new-vendor") { state.editingVendorId = "new"; state.selectedVendorId = null; render(); }
+  if (action === "open-vendor") { state.selectedVendorId = target.dataset.vendor; state.selectedVendorPhotoIndex = 0; render(); }
+  if (action === "close-vendor-detail") { state.selectedVendorId = null; render(); }
+  if (action === "edit-vendor") { state.editingVendorId = target.dataset.vendor; state.selectedVendorId = null; render(); }
+  if (action === "close-vendor-editor") { clearPendingPhotoUrls(); state.editingVendorId = null; render(); }
+  if (action === "toggle-favorite") toggleFavorite(target.dataset.vendor);
+  if (action === "vendor-photo-prev") moveVendorPhoto(-1);
+  if (action === "vendor-photo-next") moveVendorPhoto(1);
+  if (action === "select-vendor-photo") { state.selectedVendorPhotoIndex = Number(target.dataset.index); render(); }
+  if (action === "delete-vendor") await handleDeleteVendor(target.dataset.vendor);
+  if (action === "open-category-manager") { state.categoryManagerOpen = true; render(); }
+  if (action === "close-category-manager") { state.categoryManagerOpen = false; render(); }
+  if (action === "delete-category") handleDeleteCategory(target.dataset.category);
+  if (action === "open-presentation") { state.presentationVendorId = target.dataset.vendor; state.presentationPhotoIndex = state.selectedVendorPhotoIndex; state.selectedVendorId = null; render(); }
+  if (action === "close-presentation") { state.presentationVendorId = null; render(); }
+  if (action === "presentation-prev") movePresentationPhoto(-1);
+  if (action === "presentation-next") movePresentationPhoto(1);
+  if (action === "delete-member") handleDeleteMember(target.dataset.member);
+  if (action === "export-data") await exportAllData();
+  if (action === "import-data") document.querySelector('[data-action="data-import-file"]').click();
 });
 
 document.addEventListener("input", (event) => {
   const target = event.target;
-  if (target?.dataset?.action === "week-note" && plannerMode()) {
-    queueWeekSave(target);
+  if (target?.dataset?.action === "week-note" && plannerMode()) queueWeekSave(target);
+  if (target?.dataset?.action === "vendor-search") { state.vendorQuery = target.value; updateVendorFeed(); }
+});
+
+document.addEventListener("change", async (event) => {
+  const target = event.target;
+  try {
+    if (target?.dataset?.action === "vendor-photos") previewSelectedPhotos(target);
+    if (target?.dataset?.action === "data-import-file" && target.files?.[0]) await importAllData(target.files[0]);
+  } catch (error) {
+    alert(error.message || "파일을 처리하지 못했습니다.");
   }
 });
 
-const savedSession = localStorage.getItem(sessionKey);
-if (savedSession && setSession(savedSession)) {
-  render();
-} else {
-  if (savedSession) localStorage.removeItem(sessionKey);
-  render();
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (state.presentationVendorId) state.presentationVendorId = null;
+    else if (state.editingVendorId) { clearPendingPhotoUrls(); state.editingVendorId = null; }
+    else if (state.selectedVendorId) state.selectedVendorId = null;
+    else if (state.categoryManagerOpen) state.categoryManagerOpen = false;
+    else if (state.selectedDate) state.selectedDate = null;
+    else return;
+    render();
+  }
+  if (state.presentationVendorId && event.key === "ArrowLeft") movePresentationPhoto(-1);
+  if (state.presentationVendorId && event.key === "ArrowRight") movePresentationPhoto(1);
+});
+
+async function boot() {
+  const savedSession = localStorage.getItem(sessionKey);
+  if (savedSession && setSession(savedSession)) {
+    render();
+    try { await hydratePhotoLibrary(); } catch { notify("사진 저장소를 불러오지 못했습니다."); }
+    render();
+  } else {
+    if (savedSession) localStorage.removeItem(sessionKey);
+    render();
+  }
 }
+
+boot();
