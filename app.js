@@ -48,10 +48,6 @@ function displayDate(key) {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function monthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function weekKey(date) {
   const start = new Date(date);
   start.setDate(start.getDate() - start.getDay());
@@ -192,14 +188,20 @@ function getMonthCells(monthDate) {
   return cells;
 }
 
-function getMonthWeeks(monthDate) {
+function getMonthRows(monthDate) {
   const cells = getMonthCells(monthDate);
-  const weeks = [];
+  const rows = [];
   for (let i = 0; i < cells.length; i += 7) {
-    const realDays = cells.slice(i, i + 7).filter(Boolean);
-    if (realDays.length) weeks.push(weekKey(realDays[0]));
+    const weekDays = cells.slice(i, i + 7);
+    const realDays = weekDays.filter(Boolean);
+    if (realDays.length) {
+      rows.push({
+        key: weekKey(realDays[0]),
+        days: weekDays
+      });
+    }
   }
-  return [...new Set(weeks)];
+  return rows;
 }
 
 function showError(message) {
@@ -293,7 +295,6 @@ function renderPlannerPanel() {
 }
 
 function renderMonth(monthDate) {
-  const cells = getMonthCells(monthDate);
   const todayKey = dateKey(new Date());
   return `
     <article class="month-card">
@@ -301,24 +302,35 @@ function renderMonth(monthDate) {
         <div class="month-name">${monthDate.getMonth() + 1}</div>
         <strong>${monthDate.getFullYear()}</strong>
       </div>
-      <div class="weekday">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
-      <div class="days">
-        ${cells.map((date) => {
-          if (!date) return `<div class="day empty"></div>`;
-          const key = dateKey(date);
-          const classes = ["day"];
-          if (key === todayKey) classes.push("today");
-          if (state.dayNotes.has(key)) classes.push("has-note");
-          return `<button class="${classes.join(" ")}" type="button" data-action="select-day" data-date="${key}">${date.getDate()}</button>`;
-        }).join("")}
+      <div class="week-calendar-head">
+        <div class="weekday">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
+        <span>주별 코멘트</span>
       </div>
-      <div class="week-notes">
-        ${getMonthWeeks(monthDate).map((key) => {
-          const value = state.weekNotes.get(key)?.text || "";
+      <div class="week-rows">
+        ${getMonthRows(monthDate).map((row) => {
+          const value = state.weekNotes.get(row.key)?.text || "";
+          const days = row.days.map((date) => {
+            if (!date) return `<span class="day empty"></span>`;
+            const key = dateKey(date);
+            const classes = ["day"];
+            if (key === todayKey) classes.push("today");
+            if (state.dayNotes.has(key)) classes.push("has-note");
+            return `<button class="${classes.join(" ")}" type="button" data-action="select-day" data-date="${key}">${date.getDate()}</button>`;
+          }).join("");
           if (plannerMode()) {
-            return `<label class="week-line"><span>${displayDate(key)} 주</span><textarea data-action="week-note" data-week="${key}" placeholder="주별 메모">${escapeHtml(value)}</textarea></label>`;
+            return `
+              <div class="week-row">
+                <div class="week-days">${days}</div>
+                <textarea class="week-comment" data-action="week-note" data-week="${row.key}" placeholder="${displayDate(row.key)} 주 코멘트">${escapeHtml(value)}</textarea>
+              </div>
+            `;
           }
-          return `<div class="week-line"><span>${displayDate(key)} 주</span><div class="week-read">${escapeHtml(value || "-")}</div></div>`;
+          return `
+            <div class="week-row">
+              <div class="week-days">${days}</div>
+              <div class="week-comment week-read">${escapeHtml(value || "-")}</div>
+            </div>
+          `;
         }).join("")}
       </div>
     </article>
@@ -379,24 +391,31 @@ function renderPrintSheet() {
       </div>
       <div class="print-grid">
         ${monthsFromToday().map((month) => {
-          const cells = getMonthCells(month);
-          const notes = [...state.dayNotes.values()].filter((note) => note.id.startsWith(monthKey(month))).slice(0, 5);
           return `
             <article class="print-month">
-              <h3>${month.getMonth() + 1}</h3>
-              <div class="print-weekdays">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
-              <div class="print-days">
-                ${cells.map((date) => {
-                  if (!date) return `<span class="print-day"></span>`;
-                  const key = dateKey(date);
-                  const classes = ["print-day"];
-                  if (key === todayKey) classes.push("today");
-                  if (state.dayNotes.has(key)) classes.push("has-note");
-                  return `<span class="${classes.join(" ")}">${date.getDate()}</span>`;
-                }).join("")}
+              <div class="print-month-head">
+                <h3>${month.getMonth() + 1}</h3>
+                <div class="print-weekdays">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
               </div>
-              <div class="print-lines">
-                ${Array.from({ length: 5 }, (_, index) => `<div class="print-line">${escapeHtml(notes[index]?.title || "")}</div>`).join("")}
+              <div class="print-week-rows">
+                ${getMonthRows(month).map((row) => {
+                  const value = state.weekNotes.get(row.key)?.text || "";
+                  return `
+                    <div class="print-week-row">
+                      <div class="print-week-days">
+                        ${row.days.map((date) => {
+                          if (!date) return `<span class="print-day"></span>`;
+                          const key = dateKey(date);
+                          const classes = ["print-day"];
+                          if (key === todayKey) classes.push("today");
+                          if (state.dayNotes.has(key)) classes.push("has-note");
+                          return `<span class="${classes.join(" ")}">${date.getDate()}</span>`;
+                        }).join("")}
+                      </div>
+                      <div class="print-line">${escapeHtml(value)}</div>
+                    </div>
+                  `;
+                }).join("")}
               </div>
             </article>
           `;
@@ -555,24 +574,24 @@ function buildPosterSvg() {
     weekdays.forEach((day, dayIndex) => {
       svg += `<text x="${x + 34 + dayIndex * 27}" y="${y}" text-anchor="middle" font-size="12" font-weight="800" font-family="Arial, sans-serif" fill="#22201d">${day}</text>`;
     });
-    getMonthCells(month).forEach((date, cellIndex) => {
-      if (!date) return;
-      const cx = x + 34 + (cellIndex % 7) * 27;
-      const cy = y + 28 + Math.floor(cellIndex / 7) * 26;
-      const key = dateKey(date);
-      if (key === todayKey) {
-        svg += `<circle cx="${cx}" cy="${cy - 4}" r="12" fill="#b83e4b"/>`;
+    getMonthRows(month).forEach((week, weekIndex) => {
+      const cy = y + 28 + weekIndex * 34;
+      week.days.forEach((date, dayIndex) => {
+        if (!date) return;
+        const cx = x + 34 + dayIndex * 27;
+        const key = dateKey(date);
+        if (key === todayKey) {
+          svg += `<circle cx="${cx}" cy="${cy - 4}" r="12" fill="#b83e4b"/>`;
+        }
+        svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="13" font-weight="${state.dayNotes.has(key) ? "800" : "500"}" font-family="Arial, sans-serif" fill="${key === todayKey ? "#ffffff" : state.dayNotes.has(key) ? "#0f8b8d" : "#22201d"}">${date.getDate()}</text>`;
+      });
+      const lineY = cy - 1;
+      const text = state.weekNotes.get(week.key)?.text || "";
+      svg += `<line x1="${x + 154}" y1="${lineY}" x2="${x + colWidth}" y2="${lineY}" stroke="#aaa" stroke-dasharray="2 4"/>`;
+      if (text) {
+        svg += `<text x="${x + colWidth - 4}" y="${lineY - 5}" text-anchor="end" font-size="22" font-family="Arial, sans-serif" fill="#22201d">${escapeHtml(text)}</text>`;
       }
-      svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="13" font-weight="${state.dayNotes.has(key) ? "800" : "500"}" font-family="Arial, sans-serif" fill="${key === todayKey ? "#ffffff" : state.dayNotes.has(key) ? "#0f8b8d" : "#22201d"}">${date.getDate()}</text>`;
     });
-    const notes = [...state.dayNotes.values()].filter((note) => note.id.startsWith(monthKey(month))).slice(0, 5);
-    for (let i = 0; i < 5; i += 1) {
-      const ly = y + 46 + i * 36;
-      svg += `<line x1="${x + 158}" y1="${ly}" x2="${x + colWidth}" y2="${ly}" stroke="#aaa" stroke-dasharray="2 4"/>`;
-      if (notes[i]) {
-        svg += `<text x="${x + colWidth - 4}" y="${ly - 5}" text-anchor="end" font-size="25" font-family="Arial, sans-serif" fill="#22201d">${escapeHtml(notes[i].title || "")}</text>`;
-      }
-    }
   });
   svg += `</svg>`;
   return svg;

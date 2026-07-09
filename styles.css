@@ -242,10 +242,27 @@ h3 {
   font-weight: 900;
 }
 
+.week-calendar-head {
+  display: grid;
+  grid-template-columns: 122px minmax(0, 1fr);
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 6px;
+}
+
+.week-calendar-head > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-align: right;
+  text-transform: uppercase;
+}
+
 .weekday,
-.days {
+.week-days {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
 }
 
 .weekday span {
@@ -255,21 +272,30 @@ h3 {
   text-align: center;
 }
 
-.days {
-  gap: 4px;
-  margin-top: 8px;
+.week-rows {
+  display: grid;
+  gap: 5px;
+}
+
+.week-row {
+  display: grid;
+  grid-template-columns: 122px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
 }
 
 .day {
   position: relative;
   display: grid;
   place-items: center;
-  aspect-ratio: 1;
-  border-radius: 8px;
-  background: #fff;
+  min-width: 0;
+  min-height: 24px;
+  border-radius: 6px;
+  background: transparent;
   color: var(--ink);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  padding: 0;
 }
 
 .day.empty {
@@ -284,10 +310,10 @@ h3 {
 .day.has-note::after {
   content: "";
   position: absolute;
-  right: 5px;
-  bottom: 5px;
-  width: 6px;
-  height: 6px;
+  right: 1px;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: var(--accent-2);
 }
@@ -296,40 +322,19 @@ h3 {
   background: #ffd166;
 }
 
-.week-notes {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.week-line {
-  display: grid;
-  grid-template-columns: 58px 1fr;
-  gap: 8px;
-  align-items: start;
-  min-height: 38px;
-}
-
-.week-line span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  padding-top: 8px;
-}
-
-.week-line textarea,
-.week-read {
-  min-height: 38px;
+.week-comment,
+.week-comment.week-read {
+  width: 100%;
+  min-height: 30px;
   border: 0;
   border-bottom: 1px dotted #a69b8d;
   border-radius: 0;
   background: transparent;
-  padding: 7px 2px;
-  font-size: 13px;
-}
-
-.week-read {
   color: var(--ink);
+  font-size: 13px;
+  line-height: 1.25;
+  padding: 5px 2px 3px;
+  resize: none;
 }
 
 .event-list {
@@ -445,13 +450,21 @@ h3 {
     page-break-inside: avoid;
   }
 
+  .print-month-head {
+    display: grid;
+    grid-template-columns: 8mm 24mm;
+    gap: 2mm;
+    align-items: center;
+    margin-bottom: 1mm;
+  }
+
   .print-month h3 {
     font-size: 13px;
-    margin-bottom: 2mm;
+    margin: 0;
   }
 
   .print-weekdays,
-  .print-days {
+  .print-week-days {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
     gap: 1mm;
@@ -459,8 +472,20 @@ h3 {
     text-align: center;
   }
 
+  .print-week-rows {
+    display: grid;
+    gap: 1.2mm;
+  }
+
+  .print-week-row {
+    display: grid;
+    grid-template-columns: 34mm 1fr;
+    gap: 2mm;
+    align-items: center;
+  }
+
   .print-day {
-    min-height: 3.8mm;
+    min-height: 4mm;
   }
 
   .print-day.today {
@@ -474,12 +499,8 @@ h3 {
     font-weight: 900;
   }
 
-  .print-lines {
-    margin-top: 1.5mm;
-  }
-
   .print-line {
-    height: 5.2mm;
+    min-height: 4.4mm;
     border-bottom: 1px dotted #aaa;
     font-size: 9px;
     text-align: right;
