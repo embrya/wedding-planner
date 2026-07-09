@@ -247,9 +247,9 @@ function renderApp() {
         </div>
       </header>
       <div class="grid">
-        ${plannerMode() ? renderPlannerPanel() : ""}
         <section class="calendar">${monthsFromToday().map(renderMonth).join("")}</section>
         ${renderUpcoming()}
+        ${plannerMode() ? renderPlannerPanel() : ""}
       </div>
       ${state.selectedDate ? renderDayEditor() : ""}
     </section>
@@ -259,38 +259,40 @@ function renderApp() {
 
 function renderPlannerPanel() {
   return `
-    <section class="panel">
-      <h3>관리</h3>
-      <form class="form-grid" data-action="save-wedding">
-        <div class="form-grid two">
-          <label>신랑 이름<input name="groomName" value="${escapeHtml(state.wedding?.groomName || "")}" required /></label>
-          <label>신부 이름<input name="brideName" value="${escapeHtml(state.wedding?.brideName || "")}" required /></label>
-        </div>
-        <div class="form-grid two">
-          <label>예식일<input name="weddingDate" type="date" value="${escapeHtml(state.wedding?.weddingDate || "")}" required /></label>
-          <label>플래너명<input name="plannerName" value="${escapeHtml(state.wedding?.plannerName || "")}" /></label>
-        </div>
-        <button type="submit">저장</button>
-      </form>
-      <form class="form-grid" data-action="create-account">
-        <h3>신랑/신부 로그인 발급</h3>
-        <div class="form-grid two">
-          <label>역할
-            <select name="role">
-              <option value="groom">신랑</option>
-              <option value="bride">신부</option>
-            </select>
-          </label>
-          <label>이름<input name="displayName" required /></label>
-        </div>
-        <label>로그인 아이디<input name="loginId" type="text" required /></label>
-        <div class="form-grid two">
-          <label>임시 비밀번호<input name="password" minlength="1" value="${generatePassword()}" required /></label>
-          <button class="secondary" type="button" data-action="regen-password">비번 새로</button>
-        </div>
-        <button type="submit">계정 발급</button>
-      </form>
-    </section>
+    <details class="panel planner-panel">
+      <summary>관리 / 계정 발급</summary>
+      <div class="planner-panel-body">
+        <form class="form-grid" data-action="save-wedding">
+          <div class="form-grid two">
+            <label>신랑 이름<input name="groomName" value="${escapeHtml(state.wedding?.groomName || "")}" required /></label>
+            <label>신부 이름<input name="brideName" value="${escapeHtml(state.wedding?.brideName || "")}" required /></label>
+          </div>
+          <div class="form-grid two">
+            <label>예식일<input name="weddingDate" type="date" value="${escapeHtml(state.wedding?.weddingDate || "")}" required /></label>
+            <label>플래너명<input name="plannerName" value="${escapeHtml(state.wedding?.plannerName || "")}" /></label>
+          </div>
+          <button type="submit">저장</button>
+        </form>
+        <form class="form-grid" data-action="create-account">
+          <h3>신랑/신부 로그인 발급</h3>
+          <div class="form-grid two">
+            <label>역할
+              <select name="role">
+                <option value="groom">신랑</option>
+                <option value="bride">신부</option>
+              </select>
+            </label>
+            <label>이름<input name="displayName" required /></label>
+          </div>
+          <label>로그인 아이디<input name="loginId" type="text" required /></label>
+          <div class="form-grid two">
+            <label>임시 비밀번호<input name="password" minlength="1" value="${generatePassword()}" required /></label>
+            <button class="secondary" type="button" data-action="regen-password">비번 새로</button>
+          </div>
+          <button type="submit">계정 발급</button>
+        </form>
+      </div>
+    </details>
   `;
 }
 

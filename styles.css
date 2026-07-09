@@ -206,9 +206,40 @@ h3 {
 }
 
 .panel {
+  padding: 14px;
+}
+
+.planner-panel {
+  margin-bottom: 22px;
+}
+
+.planner-panel summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 900;
+  list-style: none;
+}
+
+.planner-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.planner-panel summary::after {
+  content: "+";
+  float: right;
+  color: var(--accent-2);
+  font-weight: 900;
+}
+
+.planner-panel[open] summary::after {
+  content: "-";
+}
+
+.planner-panel-body {
   display: grid;
   gap: 14px;
-  padding: 14px;
+  margin-top: 14px;
 }
 
 .form-grid {
