@@ -2077,6 +2077,433 @@ svg {
   gap: 8px;
 }
 
+.app-topbar {
+  flex-wrap: wrap;
+}
+
+.wedding-switcher {
+  order: 3;
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.wedding-switcher svg {
+  width: 15px;
+  color: var(--muted);
+}
+
+.wedding-switcher select {
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  padding: 0 24px 0 0;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.overdue-banner,
+.archive-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid #dfb8bd;
+  border-radius: 6px;
+  background: #fbf1f2;
+  color: #8e2f3a;
+  padding: 11px 12px;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.overdue-banner svg:last-child {
+  margin-left: auto;
+}
+
+.archive-banner {
+  border-color: var(--line-strong);
+  background: #eef0ed;
+  color: var(--ink);
+}
+
+.archive-banner > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.archive-banner small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.archive-banner button {
+  margin-left: auto;
+  border-radius: 5px;
+  background: var(--paper);
+  padding: 8px 10px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.aggregate-legend {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+}
+
+.aggregate-legend::-webkit-scrollbar {
+  display: none;
+}
+
+.aggregate-legend span {
+  flex: 0 0 auto;
+}
+
+.aggregate-legend i:not(.legend-today) {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.aggregate-month .week-calendar-head,
+.aggregate-week-row {
+  grid-template-columns: minmax(0, 1fr) minmax(112px, 32%);
+}
+
+.aggregate-day {
+  align-content: center;
+  gap: 2px;
+}
+
+.aggregate-day:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.event-dots {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  height: 4px;
+}
+
+.event-dots b {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.aggregate-day.today .event-dots b {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+}
+
+.aggregate-week-notes {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 40px;
+  border-bottom: 1px dotted #9da19a;
+  padding: 2px 0;
+}
+
+.aggregate-week-notes > button:not(.aggregate-more) {
+  display: grid;
+  grid-template-columns: 5px auto minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  text-align: left;
+}
+
+.aggregate-week-notes button i,
+.aggregate-event > i,
+.aggregate-list button > i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wedding-color);
+}
+
+.aggregate-week-notes button span,
+.aggregate-week-notes button strong,
+.aggregate-week-notes button em {
+  overflow: hidden;
+  font-size: 7px;
+  font-style: normal;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aggregate-week-notes button span {
+  color: var(--faint);
+}
+
+.aggregate-week-notes button strong {
+  max-width: 44px;
+}
+
+.aggregate-week-notes button em {
+  color: var(--muted);
+}
+
+.aggregate-more {
+  justify-self: end;
+  border-radius: 4px;
+  background: #eceeea;
+  color: var(--muted);
+  padding: 2px 5px;
+  font-size: 7px;
+  font-weight: 850;
+}
+
+.aggregate-event > i {
+  flex: 0 0 auto;
+}
+
+.couple-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.segment-control {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.segment-control button {
+  min-width: 58px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 10px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.segment-control button.active {
+  background: var(--ink);
+  color: #fff;
+}
+
+.couple-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.couple-card {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--paper);
+}
+
+.couple-card[hidden] {
+  display: none;
+}
+
+.couple-card > button {
+  position: relative;
+  display: grid;
+  width: 100%;
+  gap: 11px;
+  background: transparent;
+  color: var(--ink);
+  padding: 16px;
+  text-align: left;
+}
+
+.couple-color {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: var(--wedding-color);
+}
+
+.couple-card-head,
+.couple-card-footer,
+.couple-card-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.couple-card-head span {
+  border-radius: 999px;
+  background: #eef0ed;
+  padding: 5px 8px;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.couple-card-head small,
+.couple-card-footer,
+.couple-card-stats {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.couple-card > button > strong {
+  font-family: var(--font-display);
+  font-size: 21px;
+}
+
+.couple-card-stats {
+  justify-content: flex-start;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.couple-card-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.couple-card-stats svg,
+.couple-card-footer svg {
+  width: 13px;
+  height: 13px;
+}
+
+.color-picker {
+  display: flex;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+}
+
+.color-picker legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.color-picker label {
+  display: block;
+}
+
+.color-picker input {
+  position: absolute;
+  opacity: 0;
+}
+
+.color-picker span {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px var(--line-strong);
+}
+
+.color-picker input:checked + span {
+  box-shadow: inset 0 0 0 4px #fff, 0 0 0 2px var(--ink);
+}
+
+.aggregate-list,
+.assigned-vendor-list {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+}
+
+.aggregate-list > button,
+.assigned-vendor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  padding: 11px;
+  text-align: left;
+}
+
+.aggregate-list button > span,
+.assigned-vendor > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.aggregate-list small,
+.assigned-vendor small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aggregate-list button > svg {
+  margin-left: auto;
+}
+
+.assigned-vendor-list {
+  padding: 0;
+}
+
+.assigned-vendor > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--category-color) 15%, white);
+  color: var(--category-color);
+}
+
+.wedding-status-action,
+.context-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.wedding-status-action > span,
+.context-empty > div {
+  display: grid;
+  gap: 3px;
+}
+
+.wedding-status-action small,
+.context-empty p {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.vendor-detail > .modal-actions {
+  flex-wrap: wrap;
+}
+
+.vendor-detail > .modal-actions .grow {
+  flex-basis: 100%;
+}
+
 .bottom-nav {
   position: fixed;
   right: 10px;
@@ -2084,7 +2511,7 @@ svg {
   left: 10px;
   z-index: 40;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   min-height: 66px;
   overflow: hidden;
   border: 1px solid rgba(23, 25, 22, 0.2);
@@ -2222,8 +2649,18 @@ svg {
   }
 
   .app-topbar {
+    flex-wrap: nowrap;
     padding-right: 24px;
     padding-left: 24px;
+  }
+
+  .wedding-switcher {
+    order: 0;
+    width: min(280px, 34vw);
+    margin-left: auto;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+    padding: 0 0 0 12px;
   }
 
   .brand-button strong,
@@ -2236,6 +2673,10 @@ svg {
   }
 
   .calendar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .couple-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2252,7 +2693,7 @@ svg {
   .bottom-nav {
     right: auto;
     left: 50%;
-    width: 430px;
+    width: 520px;
     transform: translateX(-50%);
   }
 
@@ -2278,6 +2719,14 @@ svg {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
     overflow: hidden;
+  }
+
+  .vendor-detail > .modal-actions {
+    flex-wrap: nowrap;
+  }
+
+  .vendor-detail > .modal-actions .grow {
+    flex-basis: 0;
   }
 
   .detail-gallery,
@@ -2340,6 +2789,10 @@ svg {
 
   .vendor-feed {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .couple-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .manage-view {
