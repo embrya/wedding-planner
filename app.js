@@ -6,6 +6,13 @@ const printRoot = document.querySelector("#print-root");
 const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
 const roleLabels = { planner: "플래너", groom: "신랑", bride: "신부" };
 const photoBucket = "vendor-media";
+const photoOptimization = {
+  maxEdge: 1920,
+  minEdge: 1440,
+  targetBytes: 1.2 * 1024 * 1024,
+  maxSourceBytes: 30 * 1024 * 1024,
+  qualitySteps: [0.88, 0.84, 0.8, 0.76]
+};
 const vendorStatuses = ["관심", "상담 예정", "견적 받음", "비교 중", "계약 완료", "보류"];
 const plannerNavItems = [
   { view: "overview", label: "일정", icon: "calendar-range" },
@@ -112,6 +119,8 @@ function freshState() {
     presentationVendorId: null,
     presentationPhotoIndex: 0,
     pendingPhotoUrls: [],
+    pendingPhotoOptimizations: new Map(),
+    pendingPhotoGeneration: 0,
     loading: false,
     error: ""
   };
@@ -569,6 +578,22 @@ function throwIfError(result) {
   return result.data;
 }
 
+const photoObjectStore = {
+  async signedUrls(paths, expiresIn = 60 * 60 * 6) {
+    return throwIfError(await supabase.storage.from(photoBucket).createSignedUrls(paths, expiresIn));
+  },
+  async upload(path, blob, options = {}) {
+    return throwIfError(await supabase.storage.from(photoBucket).upload(path, blob, {
+      contentType: blob.type || "image/jpeg",
+      upsert: Boolean(options.upsert)
+    }));
+  },
+  async remove(paths) {
+    if (!paths.length) return [];
+    return throwIfError(await supabase.storage.from(photoBucket).remove(paths));
+  }
+};
+
 function normalizeLoginId(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -784,10 +809,7 @@ async function hydrateRemoteState(user, options = {}) {
     createdAt: photo.created_at
   }));
   if (photos.length) {
-    const signed = throwIfError(await supabase.storage.from(photoBucket).createSignedUrls(
-      photos.map((photo) => photo.storage_path),
-      60 * 60 * 6
-    )) || [];
+    const signed = await photoObjectStore.signedUrls(photos.map((photo) => photo.storage_path)) || [];
     signed.forEach((item, index) => {
       if (item.signedUrl) state.photoUrls.set(photos[index].id, item.signedUrl);
     });
@@ -1708,15 +1730,16 @@ function renderVendorEditor() {
       </header>
       <div class="editor-scroll">
         <section class="photo-uploader">
-          <div class="editor-section-title"><strong>샘플 사진</strong><span>최대 20장 · 자동 최적화</span></div>
+          <div class="editor-section-title"><strong>샘플 사진</strong><span>최대 20장 · 1,920px 고화질 최적화</span></div>
           ${existingPhotos.length ? `<div class="existing-photo-grid">${existingPhotos.map((id) => `<label class="existing-photo"><img src="${state.photoUrls.get(id)}" alt="" /><input type="checkbox" name="removePhoto" value="${id}" /><span>${icon("trash-2")} 삭제</span></label>`).join("")}</div>` : ""}
           <label class="upload-dropzone">
             ${icon("image-plus")}
             <strong>사진 추가</strong>
-            <span>여러 장을 한 번에 선택할 수 있습니다</span>
+            <span>원본 용량은 저장 전 자동으로 줄어듭니다</span>
             <input data-action="vendor-photos" name="photos" type="file" accept="image/*" multiple />
           </label>
           <div class="pending-photo-preview" aria-live="polite"></div>
+          <div class="pending-photo-summary" aria-live="polite" hidden></div>
         </section>
         <section class="editor-fields">
           <div class="field-grid two-cols">
@@ -2190,19 +2213,81 @@ async function loadImage(file) {
   }
 }
 
-async function compressPhoto(file) {
-  if (!file.type.startsWith("image/")) throw new Error("이미지 파일만 등록할 수 있습니다.");
-  const image = await loadImage(file);
-  const maxEdge = 1600;
-  const ratio = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0KB";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
+}
+
+function photoFileKey(file) {
+  return [file.name, file.size, file.lastModified, file.type].join(":");
+}
+
+function drawPhotoCanvas(image, width, height) {
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * ratio));
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * ratio));
-  const context = canvas.getContext("2d");
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("사진을 처리할 수 없는 브라우저입니다.");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("사진 변환에 실패했습니다.")), "image/jpeg", 0.84));
+  return canvas;
+}
+
+function canvasToJpeg(canvas, quality) {
+  return new Promise((resolve, reject) => canvas.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error("사진 변환에 실패했습니다.")),
+    "image/jpeg",
+    quality
+  ));
+}
+
+async function compressPhoto(file) {
+  if (!file.type.startsWith("image/")) throw new Error("이미지 파일만 등록할 수 있습니다.");
+  if (file.size > photoOptimization.maxSourceBytes) throw new Error(`${file.name}: 원본 사진은 30MB 이하만 등록할 수 있습니다.`);
+  const image = await loadImage(file);
+  const sourceWidth = image.naturalWidth;
+  const sourceHeight = image.naturalHeight;
+  const sourceEdge = Math.max(sourceWidth, sourceHeight);
+  if (!sourceWidth || !sourceHeight) throw new Error(`${file.name}: 이미지 크기를 확인할 수 없습니다.`);
+  const ratio = Math.min(1, photoOptimization.maxEdge / sourceEdge);
+  let width = Math.max(1, Math.round(sourceWidth * ratio));
+  let height = Math.max(1, Math.round(sourceHeight * ratio));
+  let canvas = drawPhotoCanvas(image, width, height);
+  let blob;
+  let quality = photoOptimization.qualitySteps.at(-1);
+
+  for (const candidate of photoOptimization.qualitySteps) {
+    quality = candidate;
+    blob = await canvasToJpeg(canvas, candidate);
+    if (blob.size <= photoOptimization.targetBytes) break;
+  }
+
+  const currentEdge = Math.max(width, height);
+  if (blob.size > photoOptimization.targetBytes && currentEdge > photoOptimization.minEdge) {
+    const targetRatio = Math.sqrt(photoOptimization.targetBytes / blob.size) * 0.96;
+    const resizeRatio = Math.max(photoOptimization.minEdge / currentEdge, Math.min(0.92, targetRatio));
+    width = Math.max(1, Math.round(width * resizeRatio));
+    height = Math.max(1, Math.round(height * resizeRatio));
+    canvas = drawPhotoCanvas(image, width, height);
+    for (const candidate of [0.82, 0.78, 0.74]) {
+      quality = candidate;
+      blob = await canvasToJpeg(canvas, candidate);
+      if (blob.size <= photoOptimization.targetBytes) break;
+    }
+  }
+
+  return {
+    blob,
+    width,
+    height,
+    quality,
+    originalBytes: file.size,
+    optimizedBytes: blob.size
+  };
 }
 
 async function handleSaveVendor(form) {
@@ -2215,20 +2300,20 @@ async function handleSaveVendor(form) {
   const existing = isNew ? null : vendorFor(state.editingVendorId);
   const vendorId = existing?.id || `vendor-${crypto.randomUUID()}`;
   const removeIds = formData.getAll("removePhoto");
-  const files = [...(form.querySelector('[name="photos"]')?.files || [])];
+  const photoInput = form.querySelector('[name="photos"]');
+  const files = [...(photoInput?.files || [])];
+  if (photoInput?.dataset.optimizing === "true") throw new Error("사진 최적화가 끝난 뒤 저장하세요.");
   const retainedPhotoIds = (existing?.photoIds || []).filter((id) => !removeIds.includes(id));
   if (retainedPhotoIds.length + files.length > 20) throw new Error("업체당 사진은 최대 20장까지 등록할 수 있습니다.");
   const createdPhotos = [];
   try {
     for (const [index, file] of files.entries()) {
       const id = `photo-${crypto.randomUUID()}`;
-      const blob = await compressPhoto(file);
+      const optimized = state.pendingPhotoOptimizations.get(photoFileKey(file)) || await compressPhoto(file);
+      const blob = optimized.blob;
       const legacyWeddingId = state.weddings[0]?.id;
       const storagePath = `${state.authUser.uid}/${vendorId}/${id}.jpg`;
-      throwIfError(await supabase.storage.from(photoBucket).upload(storagePath, blob, {
-        contentType: "image/jpeg",
-        upsert: false
-      }));
+      await photoObjectStore.upload(storagePath, blob);
       createdPhotos.push({
         planner_id: state.authUser.uid,
         wedding_id: legacyWeddingId || null,
@@ -2295,7 +2380,7 @@ async function handleSaveVendor(form) {
     if (createdPhotos.length) throwIfError(await supabase.from("vendor_photos").insert(createdPhotos));
     if (removeIds.length) {
       const removePaths = removeIds.map((id) => state.photoRecords.get(id)?.storagePath).filter(Boolean);
-      if (removePaths.length) throwIfError(await supabase.storage.from(photoBucket).remove(removePaths));
+      if (removePaths.length) await photoObjectStore.remove(removePaths);
       throwIfError(await supabase.from("vendor_photos")
         .delete()
         .eq("planner_id", state.authUser.uid)
@@ -2311,7 +2396,7 @@ async function handleSaveVendor(form) {
     notify(isNew ? "업체가 등록되었습니다." : "업체 정보가 저장되었습니다.");
   } catch (error) {
     const paths = createdPhotos.map((photo) => photo.storage_path);
-    if (paths.length) await supabase.storage.from(photoBucket).remove(paths).catch(() => {});
+    if (paths.length) await photoObjectStore.remove(paths).catch(() => {});
     throw error;
   }
 }
@@ -2395,7 +2480,7 @@ async function handleDeleteVendor(vendorId) {
   const vendor = vendorFor(vendorId);
   if (!vendor || !confirm(`${vendor.name} 업체와 등록 사진을 모두 삭제할까요?`)) return;
   const paths = (vendor.photoIds || []).map((id) => state.photoRecords.get(id)?.storagePath).filter(Boolean);
-  if (paths.length) throwIfError(await supabase.storage.from(photoBucket).remove(paths));
+  if (paths.length) await photoObjectStore.remove(paths);
   throwIfError(await supabase.from("vendors")
     .delete()
     .eq("planner_id", state.authUser.uid)
@@ -2480,16 +2565,84 @@ async function handleRemoveSelection(weddingId, vendorId) {
 }
 
 function clearPendingPhotoUrls() {
+  state.pendingPhotoGeneration += 1;
   state.pendingPhotoUrls.forEach((url) => URL.revokeObjectURL(url));
   state.pendingPhotoUrls = [];
+  state.pendingPhotoOptimizations.clear();
 }
 
-function previewSelectedPhotos(input) {
+async function previewSelectedPhotos(input) {
   clearPendingPhotoUrls();
-  const files = [...input.files].slice(0, 20);
+  const files = [...input.files];
+  if (files.length > 20) {
+    input.value = "";
+    throw new Error("한 번에 최대 20장까지 선택할 수 있습니다.");
+  }
   const container = input.closest(".photo-uploader").querySelector(".pending-photo-preview");
-  state.pendingPhotoUrls = files.map((file) => URL.createObjectURL(file));
-  container.innerHTML = state.pendingPhotoUrls.map((url, index) => `<span><img src="${url}" alt="추가할 사진 ${index + 1}" /></span>`).join("");
+  const summary = input.closest(".photo-uploader").querySelector(".pending-photo-summary");
+  const submit = input.closest("form").querySelector('button[type="submit"]');
+  const generation = state.pendingPhotoGeneration;
+  input.dataset.optimizing = "true";
+  submit.disabled = Boolean(files.length);
+  summary.hidden = true;
+  const originalUrls = files.map((file) => URL.createObjectURL(file));
+  state.pendingPhotoUrls.push(...originalUrls);
+  container.innerHTML = files.map((file, index) => `
+    <span class="optimizing" data-photo-preview="${index}">
+      <img src="${originalUrls[index]}" alt="추가할 사진 ${index + 1}" />
+      <small>${formatFileSize(file.size)} · 최적화 중</small>
+    </span>
+  `).join("");
+
+  const results = new Array(files.length);
+  let nextIndex = 0;
+  const optimizeNext = async () => {
+    while (nextIndex < files.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const file = files[index];
+      const optimized = await compressPhoto(file);
+      if (generation !== state.pendingPhotoGeneration) return;
+      results[index] = optimized;
+      state.pendingPhotoOptimizations.set(photoFileKey(file), optimized);
+      const previewUrl = URL.createObjectURL(optimized.blob);
+      state.pendingPhotoUrls.push(previewUrl);
+      const item = container.querySelector(`[data-photo-preview="${index}"]`);
+      if (item) {
+        item.classList.remove("optimizing");
+        item.querySelector("img").src = previewUrl;
+        item.querySelector("small").textContent = `${formatFileSize(file.size)} → ${formatFileSize(optimized.optimizedBytes)}`;
+      }
+    }
+  };
+
+  try {
+    const workers = await Promise.allSettled(Array.from({ length: Math.min(2, files.length) }, optimizeNext));
+    const failure = workers.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+    if (generation !== state.pendingPhotoGeneration || !files.length) return;
+    const originalBytes = results.reduce((total, item) => total + item.originalBytes, 0);
+    const optimizedBytes = results.reduce((total, item) => total + item.optimizedBytes, 0);
+    const savings = originalBytes ? Math.max(0, Math.round((1 - optimizedBytes / originalBytes) * 100)) : 0;
+    summary.innerHTML = `<span>원본 ${formatFileSize(originalBytes)}</span>${icon("arrow-right")}<strong>업로드 ${formatFileSize(optimizedBytes)}</strong><em>${savings}% 절감</em>`;
+    summary.hidden = false;
+    activateIcons();
+  } catch (error) {
+    if (generation === state.pendingPhotoGeneration) {
+      input.value = "";
+      input.dataset.optimizing = "false";
+      submit.disabled = false;
+      container.innerHTML = "";
+      summary.hidden = true;
+      clearPendingPhotoUrls();
+    }
+    throw error;
+  } finally {
+    if (generation === state.pendingPhotoGeneration) {
+      input.dataset.optimizing = "false";
+      submit.disabled = false;
+    }
+  }
 }
 
 function updateVendorFeed() {
@@ -2686,10 +2839,7 @@ async function importAllData(file) {
     photoOrder.set(photo.vendorId, order + 1);
     const storagePath = `${plannerId}/${photo.vendorId}/${photo.id}.jpg`;
     const blob = await fetch(photo.dataUrl).then((response) => response.blob());
-    throwIfError(await supabase.storage.from(photoBucket).upload(storagePath, blob, {
-      contentType: "image/jpeg",
-      upsert: true
-    }));
+    await photoObjectStore.upload(storagePath, blob, { upsert: true });
     photoRows.push({
       planner_id: plannerId,
       wedding_id: legacyWeddingId,
@@ -2985,7 +3135,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
-    if (target?.dataset?.action === "vendor-photos") previewSelectedPhotos(target);
+    if (target?.dataset?.action === "vendor-photos") await previewSelectedPhotos(target);
     if (target?.dataset?.action === "vendor-import-file" && target.files?.[0]) await handleVendorSpreadsheet(target.files[0]);
     if (target?.dataset?.action === "couple-sort") { state.coupleSort = target.value; render(); }
     if (target?.dataset?.action === "vendor-sort") { state.vendorSort = target.value; render(); }
