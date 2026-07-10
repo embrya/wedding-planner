@@ -2868,6 +2868,193 @@ svg {
   gap: 8px;
 }
 
+.integration-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.integration-state i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a4aaa3;
+}
+
+.integration-state.connected {
+  color: #0e655f;
+}
+
+.integration-state.connected i {
+  background: var(--teal);
+  box-shadow: 0 0 0 4px var(--teal-soft);
+}
+
+.calendar-status-loading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 76px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.calendar-status-loading svg {
+  width: 18px;
+  color: var(--teal);
+}
+
+.calendar-connected-card,
+.service-account-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.calendar-app-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+
+.calendar-app-mark svg {
+  width: 20px;
+}
+
+.calendar-connected-card > span:nth-child(2),
+.service-account-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.calendar-connected-card strong,
+.service-account-row strong {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.calendar-connected-card small,
+.service-account-row small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.calendar-sync-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.calendar-sync-stats > span {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  min-height: 58px;
+  border-right: 1px solid var(--line);
+  text-align: center;
+}
+
+.calendar-sync-stats > span:last-child {
+  border-right: 0;
+}
+
+.calendar-sync-stats strong {
+  font-size: 13px;
+}
+
+.calendar-sync-stats small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.calendar-integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.calendar-integration-actions .text-button {
+  min-height: 42px;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.calendar-setup-steps {
+  display: grid;
+  border-top: 1px solid var(--line);
+}
+
+.calendar-setup-steps > span {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 45px;
+  border-bottom: 1px solid var(--line);
+}
+
+.calendar-setup-steps b {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--paper-soft);
+  color: var(--teal);
+  font-size: 9px;
+}
+
+.calendar-setup-steps small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.calendar-setup-steps strong {
+  color: var(--ink);
+}
+
+.calendar-connect-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.integration-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: #7f313c;
+  padding: 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.integration-error svg {
+  width: 16px;
+  min-width: 16px;
+}
+
 .app-topbar {
   flex-wrap: nowrap;
 }
@@ -3810,6 +3997,24 @@ svg {
 
   .category-add-form button {
     grid-column: 1 / -1;
+  }
+
+  .calendar-connect-form {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-connect-form button {
+    width: 100%;
+  }
+
+  .calendar-integration-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .calendar-integration-actions .text-button {
+    grid-column: 1 / -1;
+    margin-left: 0;
   }
 }
 

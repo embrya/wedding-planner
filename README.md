@@ -30,6 +30,19 @@
 - 전체 웨딩 데이터와 사진 JSON 백업·복원
 - Supabase Auth 초대 계정과 역할별 Row Level Security
 - 비공개 Storage 버킷과 만료되는 사진 URL
+- 플래너 전용 Google Calendar 단방향 동기화와 5분 재시도 큐
+
+## Google Calendar 동기화
+
+플래너 설정에서 하나의 `Marryday Planner` 보조 캘린더를 연결합니다. 활성 웨딩의 예식일과 일별 메모를 커플명이 포함된 종일 일정으로 만들며, 주별 메모는 동기화하지 않습니다. 앱에서 변경하면 즉시 처리하고 실패하거나 앱이 닫혀 있으면 Supabase Cron이 5분마다 큐를 다시 처리합니다.
+
+- Edge Function: `supabase/functions/google-calendar-sync/index.ts`
+- DB migration: `supabase/migrations/20260710_google_calendar_sync.sql`
+- Cron definition: `supabase/calendar-sync-cron.sql`
+- Google 서비스 계정 JSON과 Supabase 관리자 키는 Edge Function Secret에만 저장합니다.
+- Cron 인증값은 Supabase Vault의 `calendar_sync_secret`에 저장하며 저장소에는 넣지 않습니다.
+
+iPhone에서는 Google Calendar 앱에 `dafinest10@gmail.com` 계정으로 로그인한 뒤 `Marryday Planner` 캘린더만 표시합니다. iOS의 `설정 > 앱 > 캘린더 > 캘린더 계정`에는 이 Google 계정을 추가하지 않으면 Apple 기본 캘린더와 섞이지 않습니다.
 
 ## 업체 엑셀 일괄 등록
 
@@ -63,7 +76,7 @@
 - Schema: `supabase/schema.sql`
 - Client configuration: `supabase-client.js`
 
-`supabase/schema.sql`은 신규 프로젝트용 최종 스키마입니다. 기존 단일 웨딩 프로젝트는 `supabase/migrations/20260710_multi_wedding.sql`을 한 번 적용하면 현재 데이터와 Storage 경로를 유지하면서 다중 웨딩 구조로 전환됩니다.
+`supabase/schema.sql`은 신규 프로젝트용 최종 스키마입니다. 기존 단일 웨딩 프로젝트는 `supabase/migrations/20260710_multi_wedding.sql`을 적용한 뒤 `supabase/migrations/20260710_google_calendar_sync.sql`을 적용하면 현재 데이터와 Storage 경로를 유지하면서 다중 웨딩 및 캘린더 동기화 구조로 전환됩니다.
 
 `wedding_members`가 커플 계정과 웨딩을 1:1로 연결하고, `weddings.planner_id`가 플래너의 하위 웨딩을 구분합니다. 업체 원본은 플래너 공용이며 `wedding_vendor_selections`에 커플별 진행 상태, 개별 견적, 계약 조건과 내부 메모를 저장합니다. RLS는 신랑·신부의 다른 웨딩 및 업체 자료 접근을 차단합니다.
 

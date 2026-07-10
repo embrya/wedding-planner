@@ -1,0 +1,5 @@
+project_id = "pjqfeqeyfwzbjqddutki"
+
+[functions.google-calendar-sync]
+verify_jwt = false
+

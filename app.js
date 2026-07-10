@@ -118,6 +118,9 @@ function freshState() {
     presentationShowTerms: true,
     presentationVendorId: null,
     presentationPhotoIndex: 0,
+    calendarStatus: null,
+    calendarBusy: false,
+    calendarStatusError: "",
     pendingPhotoUrls: [],
     pendingPhotoOptimizations: new Map(),
     pendingPhotoGeneration: 0,
@@ -130,6 +133,7 @@ let state = freshState();
 let weekTimer;
 let modalReturnSelector = "";
 let spreadsheetLibraryPromise;
+let calendarDrainPromise;
 
 function icon(name, className = "") {
   return `<i data-lucide="${name}" class="${className}" aria-hidden="true"></i>`;
@@ -881,6 +885,9 @@ async function loginUser(loginId, password) {
   try {
     await hydrateRemoteState(data.user);
     render();
+    void refreshCalendarStatus({ renderAfter: false }).then((status) => {
+      if (status?.configured) requestCalendarDrain();
+    });
   } catch (loadError) {
     await supabase.auth.signOut();
     state = freshState();
@@ -1014,6 +1021,102 @@ function notify(message) {
   document.body.append(toast);
   activateIcons();
   setTimeout(() => toast.remove(), 2600);
+}
+
+async function calendarFunctionError(error) {
+  try {
+    const payload = await error?.context?.json();
+    return payload?.error || error.message;
+  } catch {
+    return error?.message || "Google 캘린더 요청을 처리하지 못했습니다.";
+  }
+}
+
+async function invokeCalendarFunction(action, payload = {}) {
+  const { data, error } = await supabase.functions.invoke("google-calendar-sync", {
+    body: { action, ...payload }
+  });
+  if (error) throw new Error(await calendarFunctionError(error));
+  if (data?.error) throw new Error(data.error);
+  return data?.data || {};
+}
+
+async function refreshCalendarStatus({ renderAfter = true } = {}) {
+  if (!plannerMode()) return null;
+  state.calendarBusy = true;
+  state.calendarStatusError = "";
+  if (renderAfter) render();
+  try {
+    state.calendarStatus = await invokeCalendarFunction("status");
+    return state.calendarStatus;
+  } catch (error) {
+    state.calendarStatusError = error.message || "Google 캘린더 상태를 확인하지 못했습니다.";
+    return null;
+  } finally {
+    state.calendarBusy = false;
+    if (renderAfter) render();
+  }
+}
+
+function requestCalendarDrain() {
+  if (!plannerMode() || !state.calendarStatus?.configured || calendarDrainPromise) return;
+  const plannerId = state.authUser.uid;
+  calendarDrainPromise = invokeCalendarFunction("drain")
+    .then((status) => {
+      if (state.authUser?.uid !== plannerId) return;
+      state.calendarStatus = status;
+      state.calendarStatusError = "";
+      if (state.activeView === "settings" && !state.wedding) render();
+    })
+    .catch((error) => {
+      if (state.authUser?.uid !== plannerId) return;
+      state.calendarStatusError = error.message || "동기화 재시도를 기다리고 있습니다.";
+      if (state.activeView === "settings" && !state.wedding) render();
+    })
+    .finally(() => { calendarDrainPromise = null; });
+}
+
+async function runCalendarAction(action, payload, successMessage) {
+  if (!plannerMode()) return;
+  state.calendarBusy = true;
+  state.calendarStatusError = "";
+  render();
+  try {
+    state.calendarStatus = await invokeCalendarFunction(action, payload);
+    if (successMessage) notify(successMessage);
+  } catch (error) {
+    state.calendarStatusError = error.message || "Google 캘린더 작업을 완료하지 못했습니다.";
+  } finally {
+    state.calendarBusy = false;
+    render();
+  }
+}
+
+function formatCalendarTimestamp(value) {
+  if (!value) return "아직 동기화되지 않음";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "동기화 시각 확인 불가";
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
 }
 
 function setModalReturn(selector) {
@@ -1868,6 +1971,57 @@ function renderPresentation() {
   `;
 }
 
+function renderCalendarIntegration() {
+  const status = state.calendarStatus;
+  const busy = state.calendarBusy;
+  const connected = Boolean(status?.configured && status?.enabled);
+  const error = state.calendarStatusError || status?.lastError || "";
+  return `
+    <section class="manage-section calendar-integration">
+      <div class="section-title-row">
+        <div><div class="eyebrow">Calendar Sync</div><h2>Google 캘린더</h2></div>
+        <span class="integration-state ${connected ? "connected" : ""}"><i></i>${connected ? "연결됨" : "연결 전"}</span>
+      </div>
+      ${state.calendarStatus === null ? `
+        <div class="calendar-status-loading">${icon("loader-circle", busy ? "spin" : "")}<span>${busy ? "연결 상태 확인 중" : "Google 캘린더 상태를 불러오세요."}</span></div>
+        ${error ? `<div class="integration-error">${icon("circle-alert")}<span>${escapeHtml(error)}</span></div>` : ""}
+        ${busy ? "" : `<button class="secondary" type="button" data-action="calendar-refresh">${icon("refresh-cw")} 상태 확인</button>`}
+      ` : connected ? `
+        <div class="calendar-connected-card">
+          <span class="calendar-app-mark">${icon("calendar-check-2")}</span>
+          <span><strong>${escapeHtml(status.calendarName || "Marryday Planner")}</strong><small>${escapeHtml(formatCalendarTimestamp(status.lastSyncAt))}</small></span>
+          <a class="icon-button" href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noreferrer" aria-label="Google 캘린더 열기" title="Google 캘린더 열기">${icon("external-link")}</a>
+        </div>
+        <div class="calendar-sync-stats">
+          <span><strong>${Number(status.eventCount || 0)}</strong><small>연동 일정</small></span>
+          <span><strong>${Number(status.pendingCount || 0)}</strong><small>대기 작업</small></span>
+          <span><strong>종일</strong><small>Google 기본 알림</small></span>
+        </div>
+        ${error ? `<div class="integration-error">${icon("circle-alert")}<span>${escapeHtml(error)}</span></div>` : ""}
+        <div class="calendar-integration-actions">
+          <button class="secondary" type="button" data-action="calendar-verify" ${busy ? "disabled" : ""}>${icon("shield-check")} 연결 확인</button>
+          <button class="primary" type="button" data-action="calendar-full-sync" ${busy ? "disabled" : ""}>${icon(busy ? "loader-circle" : "refresh-cw", busy ? "spin" : "")} 전체 동기화</button>
+          <button class="text-button danger-text" type="button" data-action="calendar-disable" ${busy ? "disabled" : ""}>동기화 중지</button>
+        </div>
+      ` : `
+        <div class="calendar-setup-steps">
+          <span><b>1</b><small>Google에서 <strong>Marryday Planner</strong> 캘린더 생성</small></span>
+          <span><b>2</b><small>아래 서비스 계정에 <strong>일정 변경</strong> 권한 공유</small></span>
+          <span><b>3</b><small>캘린더 ID를 입력해 연결 확인</small></span>
+        </div>
+        ${status.setupReady ? `
+          <div class="service-account-row"><span><small>공유할 서비스 계정</small><strong>${escapeHtml(status.serviceAccountEmail)}</strong></span><button class="icon-button" type="button" data-action="copy-service-account" data-value="${escapeHtml(status.serviceAccountEmail)}" aria-label="서비스 계정 복사" title="서비스 계정 복사">${icon("copy")}</button></div>
+          <form class="calendar-connect-form" data-action="configure-calendar">
+            <label>Google 캘린더 ID<input name="calendarId" value="${escapeHtml(status.calendarId || "")}" placeholder="...@group.calendar.google.com" required /></label>
+            <button class="primary" type="submit" ${busy ? "disabled" : ""}>${icon(busy ? "loader-circle" : "link", busy ? "spin" : "")} 연결하고 동기화</button>
+          </form>
+        ` : `<div class="integration-error">${icon("circle-alert")}<span>서버의 Google 서비스 계정 설정이 필요합니다.</span></div>`}
+        ${error ? `<div class="integration-error">${icon("circle-alert")}<span>${escapeHtml(error)}</span></div>` : ""}
+      `}
+    </section>
+  `;
+}
+
 function renderManageView() {
   const assigned = state.wedding
     ? state.vendorSelections.filter((selection) => selection.weddingId === state.wedding.id)
@@ -1922,7 +2076,7 @@ function renderManageView() {
         }).join("") : `<div class="empty-inline">${icon("briefcase-business")}<span>이 커플에 제안한 업체가 없습니다.</span></div>`}</div>
         ${readonly ? "" : `<div class="form-submit-row"><button class="secondary" type="button" data-action="navigate" data-view="vendors">${icon("images")} 공용 자료실에서 추가</button></div>`}
       </section>` : `<section class="manage-section context-empty"><div>${icon("mouse-pointer-click")}<strong>커플을 선택하면 상세 설정을 관리할 수 있습니다.</strong><p>커플 목록 또는 상단 선택기에서 웨딩을 선택하세요.</p></div><button class="secondary" type="button" data-action="navigate" data-view="couples">커플 목록</button></section>`}
-      ${!state.wedding ? `<section class="manage-section">
+      ${!state.wedding ? `${renderCalendarIntegration()}<section class="manage-section">
         <div class="section-title-row"><div><div class="eyebrow">Security</div><h2>내 비밀번호</h2></div></div>
         <form class="inline-form" data-action="change-password"><label>새 비밀번호<input name="password" type="password" minlength="6" required /></label><button class="secondary" type="submit">변경</button></form>
       </section>
@@ -2046,6 +2200,7 @@ async function handleSaveWedding(form) {
   await hydrateRemoteState({ id: state.authUser.uid });
   render();
   notify("웨딩 정보가 저장되었습니다.");
+  requestCalendarDrain();
 }
 
 async function handleCreateWedding(form) {
@@ -2062,6 +2217,7 @@ async function handleCreateWedding(form) {
   await hydrateRemoteState({ id: state.authUser.uid }, { weddingId });
   render();
   notify("새 웨딩이 등록되었습니다.");
+  requestCalendarDrain();
 }
 
 async function sha256Text(value) {
@@ -2136,6 +2292,7 @@ async function handleToggleWeddingStatus() {
   await hydrateRemoteState({ id: state.authUser.uid }, { weddingId: state.wedding.id });
   render();
   notify(completing ? "웨딩을 보관했습니다." : "웨딩을 다시 활성화했습니다.");
+  requestCalendarDrain();
 }
 
 async function handleChangePassword(form) {
@@ -2144,6 +2301,12 @@ async function handleChangePassword(form) {
   if (error) throw error;
   form.reset();
   notify("비밀번호가 변경되었습니다.");
+}
+
+async function handleConfigureCalendar(form) {
+  const calendarId = String(new FormData(form).get("calendarId") || "").trim();
+  if (!calendarId) throw new Error("Google 캘린더 ID를 입력하세요.");
+  await runCalendarAction("configure", { calendarId }, "Google 캘린더를 연결했습니다.");
 }
 
 async function handleSaveDay(form) {
@@ -2160,6 +2323,7 @@ async function handleSaveDay(form) {
   await hydrateRemoteState({ id: state.authUser.uid });
   render();
   notify("일정이 저장되었습니다.");
+  requestCalendarDrain();
 }
 
 async function handleDeleteDay() {
@@ -2172,6 +2336,7 @@ async function handleDeleteDay() {
   await hydrateRemoteState({ id: state.authUser.uid });
   render();
   notify("일정이 삭제되었습니다.");
+  requestCalendarDrain();
 }
 
 function queueWeekSave(textarea) {
@@ -2961,6 +3126,7 @@ document.addEventListener("submit", async (event) => {
     if (action === "save-wedding") await handleSaveWedding(form);
     if (action === "create-account") await handleCreateAccount(form);
     if (action === "change-password") await handleChangePassword(form);
+    if (action === "configure-calendar") await handleConfigureCalendar(form);
     if (action === "save-day") await handleSaveDay(form);
     if (action === "save-vendor") await handleSaveVendor(form);
     if (action === "save-selection") await handleSaveSelection(form);
@@ -2994,6 +3160,7 @@ document.addEventListener("click", async (event) => {
     }
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
+    if (target.dataset.view === "settings" && !state.wedding && plannerMode()) await refreshCalendarStatus();
   }
   if (action === "new-wedding") { state.weddingCreatorOpen = true; render(); }
   if (action === "close-wedding-creator") { state.weddingCreatorOpen = false; render(); }
@@ -3108,6 +3275,16 @@ document.addEventListener("click", async (event) => {
   if (action === "presentation-next") movePresentationPhoto(1);
   if (action === "delete-member") await handleDeleteMember(target.dataset.member);
   if (action === "toggle-wedding-status") await handleToggleWeddingStatus();
+  if (action === "calendar-refresh") await refreshCalendarStatus();
+  if (action === "calendar-verify") await runCalendarAction("verify", {}, "Google 캘린더 연결을 확인했습니다.");
+  if (action === "calendar-full-sync") await runCalendarAction("full_sync", {}, "전체 일정을 Google 캘린더와 동기화했습니다.");
+  if (action === "calendar-disable" && confirm("Google 캘린더 동기화를 중지할까요? 기존 Google 일정은 유지됩니다.")) {
+    await runCalendarAction("disable", {}, "Google 캘린더 동기화를 중지했습니다.");
+  }
+  if (action === "copy-service-account") {
+    await copyText(target.dataset.value || "");
+    notify("서비스 계정 주소를 복사했습니다.");
+  }
   if (action === "export-data") await exportAllData();
   if (action === "import-data") document.querySelector('[data-action="data-import-file"]').click();
   } catch (error) {
@@ -3200,6 +3377,11 @@ async function boot() {
       : "서버에 연결하지 못했습니다. 잠시 후 다시 시도하세요.";
   } finally {
     render();
+    if (plannerMode()) {
+      void refreshCalendarStatus({ renderAfter: false }).then((status) => {
+        if (status?.configured) requestCalendarDrain();
+      });
+    }
   }
 }
 
