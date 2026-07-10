@@ -2404,7 +2404,7 @@ svg {
   }
 
   .print-month {
-    min-height: 43mm;
+    min-height: 56mm;
     page-break-inside: avoid;
   }
 
@@ -2426,13 +2426,15 @@ svg {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
     gap: 1mm;
-    font-size: 7px;
+    font-size: 8px;
     text-align: center;
   }
 
   .print-week-rows {
     display: grid;
-    gap: 1.2mm;
+    align-content: space-between;
+    min-height: 48mm;
+    gap: 1mm;
   }
 
   .print-week-row {
