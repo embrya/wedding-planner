@@ -7,6 +7,17 @@ const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
 const roleLabels = { planner: "플래너", groom: "신랑", bride: "신부" };
 const photoBucket = "vendor-media";
 const vendorStatuses = ["관심", "상담 예정", "견적 받음", "비교 중", "계약 완료", "보류"];
+const plannerNavItems = [
+  { view: "overview", label: "일정", icon: "calendar-range" },
+  { view: "couples", label: "웨딩", icon: "users-round" },
+  { view: "vendors", label: "레퍼런스", icon: "images" },
+  { view: "settings", label: "설정", icon: "settings-2" }
+];
+const sampleVendorImages = {
+  "sample-dress": "./assets/vendor-dress-sample.jpg",
+  "sample-venue": "./assets/vendor-venue-sample.jpg",
+  "sample-jewelry": "./assets/vendor-jewelry-sample.jpg"
+};
 
 function freshState() {
   return {
@@ -29,8 +40,15 @@ function freshState() {
     activeView: "overview",
     coupleStatus: "active",
     coupleQuery: "",
+    coupleQuickFilter: "all",
+    coupleSort: "next",
+    weddingSwitcherOpen: false,
+    weddingSwitchQuery: "",
+    recentWeddingIds: [],
     selectedCategory: "all",
     vendorQuery: "",
+    vendorFavoriteOnly: false,
+    vendorSort: "recent",
     selectedDate: null,
     aggregateDate: null,
     aggregateWeekKey: null,
@@ -42,6 +60,9 @@ function freshState() {
     weddingCreatorOpen: false,
     selectionEditor: null,
     issuedAccount: null,
+    presentationPreviewVendorId: null,
+    presentationShowPrice: true,
+    presentationShowTerms: true,
     presentationVendorId: null,
     presentationPhotoIndex: 0,
     pendingPhotoUrls: [],
@@ -52,6 +73,7 @@ function freshState() {
 
 let state = freshState();
 let weekTimer;
+let modalReturnSelector = "";
 
 function icon(name, className = "") {
   return `<i data-lucide="${name}" class="${className}" aria-hidden="true"></i>`;
@@ -617,6 +639,21 @@ function getMonthRows(monthDate) {
   return rows;
 }
 
+function weekEventSummary(row) {
+  const events = row.days
+    .filter(Boolean)
+    .map((date) => state.dayNotes.get(dateKey(date)))
+    .filter(Boolean)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const labels = events.slice(0, 2).map((note) => `${parseDate(note.id).getDate()} ${note.title || "일정"}`);
+  if (events.length > 2) labels.push(`+${events.length - 2}`);
+  return labels.join(" · ");
+}
+
+function weekDisplayText(row) {
+  return state.weekNotes.get(row.key)?.text || weekEventSummary(row);
+}
+
 function daysToWedding(wedding = state.wedding) {
   const target = parseDate(wedding?.weddingDate);
   const today = new Date();
@@ -639,6 +676,23 @@ function vendorFor(id) {
   return state.vendors.find((vendor) => vendor.id === id);
 }
 
+function vendorPhotoSources(vendor) {
+  const uploaded = (vendor?.photoIds || [])
+    .filter((id) => state.photoUrls.has(id))
+    .map((id) => state.photoUrls.get(id));
+  if (uploaded.length) return uploaded;
+  const sample = sampleVendorImages[vendor?.id];
+  return sample ? [sample] : [];
+}
+
+function presentationPrice(vendor, selection) {
+  return selection?.quotedPrice || vendor?.price || "가격 협의";
+}
+
+function presentationTerms(vendor, selection) {
+  return selection?.contractTerms || vendor?.contractTerms || vendor?.description || "";
+}
+
 function notify(message) {
   document.querySelector(".toast")?.remove();
   const toast = document.createElement("div");
@@ -648,6 +702,27 @@ function notify(message) {
   document.body.append(toast);
   activateIcons();
   setTimeout(() => toast.remove(), 2600);
+}
+
+function setModalReturn(selector) {
+  modalReturnSelector = selector;
+}
+
+function restoreModalFocus() {
+  const selector = modalReturnSelector;
+  modalReturnSelector = "";
+  if (!selector) return;
+  requestAnimationFrame(() => document.querySelector(selector)?.focus());
+}
+
+function focusActiveDialog(preferredSelector = "") {
+  requestAnimationFrame(() => {
+    const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')];
+    const dialog = dialogs.at(-1);
+    if (!dialog) return;
+    const target = preferredSelector ? dialog.querySelector(preferredSelector) : null;
+    (target || dialog.querySelector('[autofocus], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)'))?.focus();
+  });
 }
 
 function renderLogin() {
@@ -685,7 +760,7 @@ function renderLogin() {
 
 function renderApp() {
   if (!plannerMode()) state.activeView = "calendar";
-  const names = state.wedding ? weddingName(state.wedding) : "전체 웨딩 일정";
+  const names = state.wedding ? weddingName(state.wedding) : "모든 웨딩";
   let view = renderAggregateCalendarView();
   if (state.activeView === "calendar" && state.wedding) view = renderCalendarView();
   if (state.activeView === "couples") view = renderCouplesView();
@@ -695,19 +770,18 @@ function renderApp() {
   appRoot.innerHTML = `
     <section class="app-shell">
       <header class="app-topbar">
-        <button class="brand-button" type="button" data-action="navigate" data-view="${plannerMode() ? "overview" : "calendar"}" aria-label="캘린더로 이동">
+        <button class="brand-button ${plannerMode() ? "planner-brand" : ""}" type="button" data-action="navigate" data-view="${plannerMode() ? "overview" : "calendar"}" aria-label="캘린더로 이동">
           <span class="brand-mark small">M</span>
-          <span><strong>${escapeHtml(names)}</strong><small>${state.wedding ? escapeHtml(formatDateLong(state.wedding.weddingDate)) : `${state.weddings.filter((wedding) => wedding.status === "active").length}개의 진행 웨딩`}</small></span>
+          ${plannerMode() ? "" : `<span><strong>${escapeHtml(names)}</strong><small>${escapeHtml(formatDateLong(state.wedding?.weddingDate))}</small></span>`}
         </button>
         ${plannerMode() ? `
-          <label class="wedding-switcher" aria-label="웨딩 전환">
+          <button class="wedding-switcher" type="button" data-action="open-wedding-switcher" aria-label="웨딩 전환">
             ${icon("chevrons-up-down")}
-            <select data-action="wedding-switch">
-              <option value="">전체 일정</option>
-              ${state.weddings.map((wedding) => `<option value="${wedding.id}" ${wedding.id === state.currentWeddingId ? "selected" : ""}>${escapeHtml(weddingName(wedding))}${wedding.status === "completed" ? " · 보관" : ""}</option>`).join("")}
-            </select>
-          </label>
+            <span><strong>${escapeHtml(names)}</strong><small>${state.wedding ? escapeHtml(formatDateLong(state.wedding.weddingDate)) : `진행 ${state.weddings.filter((wedding) => wedding.status === "active").length}건`}</small></span>
+            ${icon("chevron-down")}
+          </button>
         ` : ""}
+        ${plannerMode() ? renderDesktopNav() : ""}
         <div class="topbar-meta">
           ${state.wedding ? `<span class="dday">${escapeHtml(daysToWedding())}</span>` : ""}
           <span class="role-pill">${escapeHtml(roleLabels[state.profile.role])}</span>
@@ -721,9 +795,11 @@ function renderApp() {
       ${state.editingVendorId ? renderVendorEditor() : ""}
       ${state.categoryManagerOpen ? renderCategoryManager() : ""}
       ${state.weddingCreatorOpen ? renderWeddingCreator() : ""}
+      ${state.weddingSwitcherOpen ? renderWeddingSwitcher() : ""}
       ${state.selectionEditor ? renderSelectionEditor() : ""}
       ${state.aggregateDate || state.aggregateWeekKey ? renderAggregateList() : ""}
       ${state.issuedAccount ? renderIssuedAccount() : ""}
+      ${state.presentationPreviewVendorId ? renderPresentationPreview() : ""}
       ${state.presentationVendorId ? renderPresentation() : ""}
     </section>
   `;
@@ -731,22 +807,21 @@ function renderApp() {
 }
 
 function renderBottomNav() {
-  const items = [
-    { view: "overview", label: "전체 일정", icon: "calendar-range" },
-    { view: "couples", label: "커플", icon: "users-round" },
-    { view: "vendors", label: "레퍼런스", icon: "images" },
-    { view: "settings", label: "설정", icon: "settings-2" }
-  ];
   const activeView = state.activeView === "calendar" ? "couples" : state.activeView;
   return `
     <nav class="bottom-nav" aria-label="주요 메뉴">
-      ${items.map((item) => `
+      ${plannerNavItems.map((item) => `
         <button class="${activeView === item.view ? "active" : ""}" type="button" data-action="navigate" data-view="${item.view}">
           ${icon(item.icon)}<span>${item.label}</span>
         </button>
       `).join("")}
     </nav>
   `;
+}
+
+function renderDesktopNav() {
+  const activeView = state.activeView === "calendar" ? "couples" : state.activeView;
+  return `<nav class="desktop-nav" aria-label="주요 메뉴">${plannerNavItems.map((item) => `<button class="${activeView === item.view ? "active" : ""}" type="button" data-action="navigate" data-view="${item.view}">${icon(item.icon)}<span>${item.label}</span></button>`).join("")}</nav>`;
 }
 
 function aggregateItemsForWeek(weekStart) {
@@ -767,12 +842,25 @@ function aggregateItemsForWeek(weekStart) {
 function renderAggregateCalendarView() {
   const activeWeddings = state.weddings.filter((wedding) => wedding.status === "active");
   const dueCount = activeWeddings.filter((wedding) => wedding.weddingDate < dateKey(new Date())).length;
+  const today = dateKey(new Date());
+  const weekEndDate = new Date();
+  weekEndDate.setDate(weekEndDate.getDate() + 7);
+  const weekEnd = dateKey(weekEndDate);
+  const todayCount = state.aggregateDayNotes.filter((note) => note.id === today && weddingFor(note.weddingId)?.status === "active").length;
+  const weekCount = state.aggregateDayNotes.filter((note) => note.id >= today && note.id <= weekEnd && weddingFor(note.weddingId)?.status === "active").length;
+  const noNextCount = activeWeddings.filter((wedding) => !nextEventForWedding(wedding.id)).length;
   return `
     <section class="view calendar-view aggregate-view">
       <header class="view-heading">
-        <div><div class="eyebrow">Planner Overview</div><h1>전체 웨딩 일정</h1><p>활성 ${activeWeddings.length}건 · 일정 ${state.aggregateDayNotes.filter((note) => activeWeddings.some((wedding) => wedding.id === note.weddingId)).length}건</p></div>
+        <div><div class="eyebrow">Planner Overview</div><h1>전체 일정</h1><p>활성 ${activeWeddings.length}건 · 일정 ${state.aggregateDayNotes.filter((note) => activeWeddings.some((wedding) => wedding.id === note.weddingId)).length}건</p></div>
         <button class="primary compact" type="button" data-action="new-wedding">${icon("plus")}<span>새 웨딩</span></button>
       </header>
+      <div class="operations-strip" aria-label="운영 현황">
+        <button type="button" data-action="open-operation-filter" data-filter="today"><span>오늘</span><strong>${todayCount}</strong></button>
+        <button type="button" data-action="open-operation-filter" data-filter="week"><span>7일 이내</span><strong>${weekCount}</strong></button>
+        <button type="button" data-action="open-operation-filter" data-filter="none"><span>다음 일정 없음</span><strong>${noNextCount}</strong></button>
+        <button class="${dueCount ? "attention" : ""}" type="button" data-action="open-operation-filter" data-filter="overdue"><span>예식일 지남</span><strong>${dueCount}</strong></button>
+      </div>
       ${dueCount ? `<button class="overdue-banner" type="button" data-action="set-couple-status" data-status="active">${icon("circle-alert")} 예식일이 지난 진행 웨딩 ${dueCount}건을 확인하세요.${icon("chevron-right")}</button>` : ""}
       <div class="calendar-legend aggregate-legend">
         <span><i class="legend-today"></i>오늘</span>
@@ -790,7 +878,7 @@ function renderAggregateMonth(monthDate) {
   return `
     <article class="month-card aggregate-month">
       <div class="month-head"><div><span class="month-number">${monthDate.getMonth() + 1}</span><span class="month-label">월</span></div><strong>${monthDate.getFullYear()}</strong></div>
-      <div class="week-calendar-head"><div class="weekday">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div><span>ALL COUPLES</span></div>
+      <div class="week-calendar-head"><div class="weekday">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div><span>전체 커플 메모</span></div>
       <div class="week-rows">
         ${getMonthRows(monthDate).map((row) => {
           const items = aggregateItemsForWeek(row.key);
@@ -800,7 +888,7 @@ function renderAggregateMonth(monthDate) {
             const events = state.aggregateDayNotes.filter((note) => note.id === key && weddingFor(note.weddingId)?.status === "active");
             return `<button class="day aggregate-day ${key === todayKey ? "today" : ""} ${events.length ? "has-events" : ""}" type="button" ${events.length ? `data-action="open-aggregate-day" data-date="${key}"` : "disabled"} aria-label="${key}"><span>${date.getDate()}</span>${events.length ? `<i class="event-dots">${events.slice(0, 3).map((event) => `<b style="background:${safeColor(weddingFor(event.weddingId)?.color)}"></b>`).join("")}</i>` : ""}</button>`;
           }).join("");
-          return `<div class="week-row aggregate-week-row"><div class="week-days">${days}</div><div class="aggregate-week-notes">${items.slice(0, 3).map((item) => {
+          return `<div class="week-row aggregate-week-row"><div class="week-days">${days}</div><div class="aggregate-week-notes" aria-label="${escapeHtml(formatDateLong(row.key))} 시작 주의 전체 커플 일정">${items.slice(0, 3).map((item) => {
             const wedding = weddingFor(item.weddingId);
             return `<button type="button" data-action="open-aggregate-item" data-wedding="${item.weddingId}" data-date="${item.type === "day" ? item.id : ""}" style="--wedding-color:${safeColor(wedding?.color)}"><i></i><span>${item.type === "day" ? displayDate(item.id) : "주"}</span><strong>${escapeHtml(weddingName(wedding))}</strong><em>${escapeHtml(item.title || item.text || "일정")}</em></button>`;
           }).join("")}${items.length > 3 ? `<button class="aggregate-more" type="button" data-action="open-aggregate-week" data-week="${row.key}">+${items.length - 3}</button>` : ""}</div></div>`;
@@ -823,11 +911,39 @@ function renderAggregateUpcoming() {
 
 function filteredWeddings() {
   const query = state.coupleQuery.trim().toLowerCase();
-  return state.weddings.filter((wedding) => {
+  const today = dateKey(new Date());
+  const weekEndDate = new Date();
+  weekEndDate.setDate(weekEndDate.getDate() + 7);
+  const weekEnd = dateKey(weekEndDate);
+  const result = state.weddings.filter((wedding) => {
     const statusMatch = wedding.status === state.coupleStatus;
-    const text = `${wedding.groomName} ${wedding.brideName} ${wedding.plannerName}`.toLowerCase();
-    return statusMatch && (!query || text.includes(query));
+    const selectedVendorNames = state.vendorSelections
+      .filter((selection) => selection.weddingId === wedding.id)
+      .map((selection) => vendorFor(selection.vendorId)?.name || "")
+      .join(" ");
+    const text = `${wedding.groomName} ${wedding.brideName} ${wedding.plannerName} ${selectedVendorNames}`.toLowerCase();
+    const nextEvent = nextEventForWedding(wedding.id);
+    const quickMatch = state.coupleQuickFilter === "all"
+      || (state.coupleQuickFilter === "today" && nextEvent?.id === today)
+      || (state.coupleQuickFilter === "week" && nextEvent?.id >= today && nextEvent?.id <= weekEnd)
+      || (state.coupleQuickFilter === "none" && !nextEvent)
+      || (state.coupleQuickFilter === "accounts" && (state.memberCounts.get(wedding.id) || 0) < 2)
+      || (state.coupleQuickFilter === "overdue" && wedding.weddingDate < today);
+    return statusMatch && quickMatch && (!query || text.includes(query));
   });
+  return result.sort((a, b) => {
+    if (state.coupleSort === "name") return weddingName(a).localeCompare(weddingName(b), "ko");
+    if (state.coupleSort === "date") return a.weddingDate.localeCompare(b.weddingDate);
+    return (nextEventForWedding(a.id)?.id || "9999-12-31").localeCompare(nextEventForWedding(b.id)?.id || "9999-12-31")
+      || a.weddingDate.localeCompare(b.weddingDate);
+  });
+}
+
+function nextEventForWedding(weddingId) {
+  const today = dateKey(new Date());
+  return state.aggregateDayNotes
+    .filter((note) => note.weddingId === weddingId && note.id >= today)
+    .sort((a, b) => a.id.localeCompare(b.id))[0] || null;
 }
 
 function renderCouplesView() {
@@ -836,10 +952,17 @@ function renderCouplesView() {
   return `
     <section class="view couples-view">
       <header class="view-heading"><div><div class="eyebrow">Wedding Portfolio</div><h1>커플 관리</h1><p>전체 ${state.weddings.length}커플 · 보관 ${state.weddings.filter((wedding) => wedding.status === "completed").length}건</p></div><button class="primary compact" type="button" data-action="new-wedding">${icon("plus")}<span>새 웨딩</span></button></header>
-      <div class="couple-tools"><label class="search-field">${icon("search")}<input data-action="couple-search" type="search" value="${escapeHtml(state.coupleQuery)}" placeholder="신랑·신부 이름 검색" /></label><div class="segment-control"><button class="${state.coupleStatus === "active" ? "active" : ""}" type="button" data-action="set-couple-status" data-status="active">진행</button><button class="${state.coupleStatus === "completed" ? "active" : ""}" type="button" data-action="set-couple-status" data-status="completed">보관</button></div></div>
+      <div class="couple-tools"><label class="search-field">${icon("search")}<input data-action="couple-search" type="search" value="${escapeHtml(state.coupleQuery)}" placeholder="커플명, 담당자, 업체 검색" /></label><div class="segment-control"><button class="${state.coupleStatus === "active" ? "active" : ""}" type="button" data-action="set-couple-status" data-status="active">진행</button><button class="${state.coupleStatus === "completed" ? "active" : ""}" type="button" data-action="set-couple-status" data-status="completed">보관</button></div></div>
+      <div class="portfolio-filters">
+        <div class="filter-chips">${[
+          ["all", "전체"], ["today", "오늘"], ["week", "이번 주"], ["none", "일정 없음"], ["accounts", "계정 미완료"], ["overdue", "예식일 지남"]
+        ].map(([value, label]) => `<button class="${state.coupleQuickFilter === value ? "active" : ""}" type="button" data-action="set-couple-filter" data-filter="${value}">${label}</button>`).join("")}</div>
+        <label class="sort-select">${icon("arrow-up-down")}<select data-action="couple-sort" aria-label="웨딩 정렬"><option value="next" ${state.coupleSort === "next" ? "selected" : ""}>다음 일정순</option><option value="date" ${state.coupleSort === "date" ? "selected" : ""}>예식일순</option><option value="name" ${state.coupleSort === "name" ? "selected" : ""}>이름순</option></select></label>
+      </div>
       <div class="couple-grid">${weddings.length ? weddings.map((wedding) => {
         const overdue = wedding.status === "active" && wedding.weddingDate < today;
-        return `<article class="couple-card" style="--wedding-color:${safeColor(wedding.color)}"><button type="button" data-action="open-wedding" data-wedding="${wedding.id}"><span class="couple-color"></span><div class="couple-card-head"><span>${wedding.status === "completed" ? "보관" : overdue ? "예식일 지남" : daysToWedding(wedding)}</span><small>${escapeHtml(formatDateLong(wedding.weddingDate))}</small></div><strong>${escapeHtml(weddingName(wedding))}</strong><div class="couple-card-stats"><span>${icon("calendar-check")} 일정 ${noteCountForWedding(wedding.id)}</span><span>${icon("user-round")} 계정 ${state.memberCounts.get(wedding.id) || 0}/2</span></div><div class="couple-card-footer"><span>담당 ${escapeHtml(wedding.plannerName)}</span>${icon("arrow-up-right")}</div></button></article>`;
+        const nextEvent = nextEventForWedding(wedding.id);
+        return `<article class="couple-card" style="--wedding-color:${safeColor(wedding.color)}"><button type="button" data-action="open-wedding" data-wedding="${wedding.id}"><span class="couple-color"></span><div class="couple-card-head"><span>${wedding.status === "completed" ? "보관" : overdue ? "예식일 지남" : daysToWedding(wedding)}</span><small>${escapeHtml(formatDateLong(wedding.weddingDate))}</small></div><strong>${escapeHtml(weddingName(wedding))}</strong><p class="couple-next ${nextEvent ? "" : "empty"}">${nextEvent ? `<b>다음 ${displayDate(nextEvent.id)}</b> ${escapeHtml(nextEvent.title || "일정")}` : "다음 일정 없음"}</p><div class="couple-card-stats"><span>${icon("user-round")} 계정 ${state.memberCounts.get(wedding.id) || 0}/2</span><span>담당 ${escapeHtml(wedding.plannerName)}</span>${icon("arrow-up-right")}</div></button></article>`;
       }).join("") : `<div class="empty-state">${icon(state.coupleStatus === "active" ? "users-round" : "archive")}<strong>${state.coupleStatus === "active" ? "진행 중인 커플이 없습니다" : "보관된 웨딩이 없습니다"}</strong><p>검색 조건을 바꾸거나 새 웨딩을 등록하세요.</p></div>`}</div>
     </section>
   `;
@@ -848,6 +971,26 @@ function renderCouplesView() {
 function renderWeddingCreator() {
   const palette = ["#39756c", "#c75a6a", "#5f7094", "#a67b33", "#8a6074", "#3c7f93"];
   return `<div class="modal-backdrop" data-action="close-wedding-creator"></div><form class="modal-sheet compact-modal" data-action="create-wedding" role="dialog" aria-modal="true"><header class="modal-header"><div><span class="modal-kicker">New Wedding</span><strong>새 웨딩 등록</strong></div><button class="icon-button" type="button" data-action="close-wedding-creator" aria-label="닫기">${icon("x")}</button></header><div class="editor-fields"><div class="field-grid two-cols"><label>신랑 이름<input name="groomName" required /></label><label>신부 이름<input name="brideName" required /></label></div><div class="field-grid two-cols"><label>예식일<input name="weddingDate" type="date" value="${defaultWeddingDate()}" required /></label><label>담당 플래너<input name="plannerName" value="${escapeHtml(state.profile?.displayName || "관리자")}" /></label></div><fieldset class="color-picker"><legend>구분 색상</legend>${palette.map((color, index) => `<label style="--swatch:${color}"><input type="radio" name="color" value="${color}" ${index === state.weddings.length % palette.length ? "checked" : ""} /><span></span></label>`).join("")}</fieldset></div><footer class="modal-actions"><button class="secondary" type="button" data-action="close-wedding-creator">취소</button><button class="primary grow" type="submit">${icon("plus")} 등록</button></footer></form>`;
+}
+
+function weddingSwitcherRows() {
+  const query = state.weddingSwitchQuery.trim().toLowerCase();
+  const matches = state.weddings.filter((wedding) => !query || `${wedding.groomName} ${wedding.brideName} ${wedding.plannerName}`.toLowerCase().includes(query));
+  const recentOrder = new Map(state.recentWeddingIds.map((id, index) => [id, index]));
+  return matches.sort((a, b) => {
+    const aRecent = recentOrder.has(a.id) ? recentOrder.get(a.id) : 99;
+    const bRecent = recentOrder.has(b.id) ? recentOrder.get(b.id) : 99;
+    return aRecent - bRecent || Number(a.status === "completed") - Number(b.status === "completed") || a.weddingDate.localeCompare(b.weddingDate);
+  });
+}
+
+function renderWeddingSwitcherRows() {
+  const weddings = weddingSwitcherRows();
+  return `<button class="context-option all ${!state.currentWeddingId ? "active" : ""}" type="button" data-action="switch-wedding" data-wedding=""><span>${icon("calendar-range")}</span><span><strong>모든 웨딩</strong><small>전체 일정과 운영 현황</small></span>${!state.currentWeddingId ? icon("check") : ""}</button>${weddings.map((wedding) => `<button class="context-option ${wedding.id === state.currentWeddingId ? "active" : ""}" type="button" data-action="switch-wedding" data-wedding="${wedding.id}" style="--wedding-color:${safeColor(wedding.color)}"><i></i><span><strong>${escapeHtml(weddingName(wedding))}</strong><small>${escapeHtml(formatDateLong(wedding.weddingDate))} · ${wedding.status === "completed" ? "보관" : daysToWedding(wedding)}</small></span>${wedding.id === state.currentWeddingId ? icon("check") : ""}</button>`).join("") || `<div class="empty-inline">${icon("search-x")}<span>검색 결과가 없습니다.</span></div>`}`;
+}
+
+function renderWeddingSwitcher() {
+  return `<div class="modal-backdrop" data-action="close-wedding-switcher"></div><section class="modal-sheet compact-modal context-switcher" role="dialog" aria-modal="true" aria-label="웨딩 전환"><header class="modal-header"><div><span class="modal-kicker">Workspace</span><strong>웨딩 전환</strong></div><button class="icon-button" type="button" data-action="close-wedding-switcher" aria-label="닫기">${icon("x")}</button></header><div class="context-search"><label class="search-field">${icon("search")}<input data-action="wedding-switch-search" type="search" value="${escapeHtml(state.weddingSwitchQuery)}" placeholder="신랑·신부 또는 담당자 검색" autofocus /></label></div><div class="context-options">${renderWeddingSwitcherRows()}</div></section>`;
 }
 
 function renderAggregateList() {
@@ -871,19 +1014,18 @@ function renderCalendarView() {
       <header class="view-heading">
         <div>
           <div class="eyebrow">${state.wedding.status === "completed" ? "Archived Wedding" : "12 Month Plan"}</div>
-          <h1>${escapeHtml(weddingName(state.wedding))}</h1>
+          <h1>12개월 일정</h1>
           <p>${first.getFullYear()}.${String(first.getMonth() + 1).padStart(2, "0")} - ${last.getFullYear()}.${String(last.getMonth() + 1).padStart(2, "0")}</p>
         </div>
         <div class="heading-actions">
-          <button class="tool-button" type="button" data-action="print">${icon("printer")}<span>PDF</span></button>
-          <button class="tool-button" type="button" data-action="png">${icon("image-down")}<span>이미지</span></button>
+          <button class="tool-button" type="button" data-action="print">${icon("printer")}<span>인쇄/PDF</span></button>
+          <button class="tool-button" type="button" data-action="png">${icon("image-down")}<span>PNG</span></button>
         </div>
       </header>
       ${state.wedding.status === "completed" ? `<div class="archive-banner">${icon("archive")}<span><strong>보관된 웨딩입니다.</strong><small>일정은 읽기 전용이며 설정에서 다시 활성화할 수 있습니다.</small></span><button type="button" data-action="navigate" data-view="settings">관리</button></div>` : ""}
       <div class="calendar-legend">
         <span><i class="legend-today"></i>오늘</span>
         <span><i class="legend-note"></i>일정 있음</span>
-        ${canEditWedding() ? `<span class="legend-help">날짜를 누르면 메모</span>` : ""}
       </div>
       <section class="calendar">${months.map(renderMonth).join("")}</section>
       ${renderUpcoming()}
@@ -901,25 +1043,28 @@ function renderMonth(monthDate) {
       </div>
       <div class="week-calendar-head">
         <div class="weekday">${weekdays.map((day) => `<span>${day}</span>`).join("")}</div>
-        <span>WEEK NOTE</span>
+        <span>주간 메모</span>
       </div>
       <div class="week-rows">
         ${getMonthRows(monthDate).map((row) => {
           const value = state.weekNotes.get(row.key)?.text || "";
+          const eventSummary = weekEventSummary(row);
           const days = row.days.map((date) => {
             if (!date) return `<span class="day empty"></span>`;
             const key = dateKey(date);
+            const note = state.dayNotes.get(key);
             const classes = ["day"];
             if (key === todayKey) classes.push("today");
-            if (state.dayNotes.has(key)) classes.push("has-note");
-            return `<button class="${classes.join(" ")}" type="button" data-action="select-day" data-date="${key}" aria-label="${key}">${date.getDate()}</button>`;
+            if (note) classes.push("has-note");
+            const ariaLabel = `${formatDateLong(key)}${key === todayKey ? ", 오늘" : ""}${note ? `, ${note.title || "일정 있음"}` : ""}`;
+            return `<button class="${classes.join(" ")}" type="button" data-action="select-day" data-date="${key}" aria-label="${escapeHtml(ariaLabel)}">${date.getDate()}</button>`;
           }).join("");
           return `
             <div class="week-row">
               <div class="week-days">${days}</div>
               ${canEditWedding()
-                ? `<textarea class="week-comment" data-action="week-note" data-week="${row.key}" placeholder="메모" aria-label="${row.key} 주간 메모">${escapeHtml(value)}</textarea>`
-                : `<div class="week-comment week-read">${escapeHtml(value || "")}</div>`}
+                ? `<textarea class="week-comment ${eventSummary && !value ? "event-preview" : ""}" data-action="week-note" data-week="${row.key}" placeholder="${escapeHtml(eventSummary)}" aria-label="${escapeHtml(formatDateLong(row.key))} 시작 주의 주간 메모">${escapeHtml(value)}</textarea>`
+                : `<div class="week-comment week-read ${eventSummary && !value ? "event-preview" : ""}" role="note" aria-label="${escapeHtml(formatDateLong(row.key))} 시작 주의 주간 메모">${escapeHtml(value || eventSummary)}</div>`}
             </div>
           `;
         }).join("")}
@@ -955,39 +1100,51 @@ function renderUpcoming() {
 
 function filteredVendors() {
   const query = state.vendorQuery.trim().toLowerCase();
-  return state.vendors.filter((vendor) => {
+  const vendors = state.vendors.filter((vendor) => {
     const categoryMatch = state.selectedCategory === "all" || vendor.categoryId === state.selectedCategory;
     const haystack = [vendor.name, vendor.description, vendor.price, ...(vendor.tags || [])].join(" ").toLowerCase();
-    return categoryMatch && (!query || haystack.includes(query));
+    return categoryMatch && (!state.vendorFavoriteOnly || vendor.favorite) && (!query || haystack.includes(query));
   });
+  if (state.vendorSort === "name") return vendors.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  if (state.vendorSort === "favorite") return vendors.sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name, "ko"));
+  return vendors.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) || a.name.localeCompare(b.name, "ko"));
 }
 
 function renderVendorView() {
+  const photoCount = state.vendors.reduce((total, vendor) => total + vendorPhotoSources(vendor).length, 0);
   return `
     <section class="view vendor-view">
       <header class="view-heading vendor-heading">
         <div>
           <div class="eyebrow">Planner Library</div>
           <h1>웨딩 레퍼런스</h1>
-          <p>업체 ${state.vendors.length}곳 · 사진 ${state.photoRecords.size}장</p>
+          <p>업체 ${state.vendors.length}곳 · 사진 ${photoCount}장</p>
         </div>
         <button class="primary compact" type="button" data-action="new-vendor">${icon("plus")}<span>업체 등록</span></button>
       </header>
-      <div class="vendor-tools">
-        <label class="search-field">${icon("search")}<input data-action="vendor-search" type="search" value="${escapeHtml(state.vendorQuery)}" placeholder="업체명, 태그, 가격 검색" aria-label="업체 검색" /></label>
-        <button class="icon-button bordered" type="button" data-action="open-category-manager" aria-label="카테고리 관리" title="카테고리 관리">${icon("folder-plus")}</button>
+      <div class="vendor-filter-bar">
+        <div class="vendor-tools">
+          <label class="search-field">${icon("search")}<input data-action="vendor-search" type="search" value="${escapeHtml(state.vendorQuery)}" placeholder="업체명, 태그, 가격 검색" aria-label="업체 검색" /></label>
+          <button class="secondary category-manage-button" type="button" data-action="open-category-manager" title="카테고리 추가 및 관리">${icon("folder-plus")}<span>카테고리</span></button>
+        </div>
+        <div class="category-strip" aria-label="업체 카테고리">
+          <button class="category-chip ${state.selectedCategory === "all" ? "active" : ""}" type="button" data-action="set-category" data-category="all">
+            <span>전체</span><small>${state.vendors.length}</small>
+          </button>
+          ${state.categories.map((category) => {
+            const count = state.vendors.filter((vendor) => vendor.categoryId === category.id).length;
+            return `<button class="category-chip ${state.selectedCategory === category.id ? "active" : ""}" style="--category-color:${safeColor(category.color)}" type="button" data-action="set-category" data-category="${escapeHtml(category.id)}"><span>${escapeHtml(category.name)}</span><small>${count}</small></button>`;
+          }).join("")}
+        </div>
       </div>
-      <div class="category-strip" aria-label="업체 카테고리">
-        <button class="category-chip ${state.selectedCategory === "all" ? "active" : ""}" type="button" data-action="set-category" data-category="all">
-          <span>전체</span><small>${state.vendors.length}</small>
-        </button>
-        ${state.categories.map((category) => {
-          const count = state.vendors.filter((vendor) => vendor.categoryId === category.id).length;
-          return `<button class="category-chip ${state.selectedCategory === category.id ? "active" : ""}" style="--category-color:${safeColor(category.color)}" type="button" data-action="set-category" data-category="${escapeHtml(category.id)}"><span>${escapeHtml(category.name)}</span><small>${count}</small></button>`;
-        }).join("")}
+      <div class="vendor-result-bar">
+        <div class="vendor-results"><strong data-vendor-result-count>${filteredVendors().length}</strong><span>개의 레퍼런스</span></div>
+        <div class="vendor-list-actions">
+          <button class="vendor-save-filter ${state.vendorFavoriteOnly ? "active" : ""}" type="button" data-action="toggle-vendor-favorites" aria-pressed="${state.vendorFavoriteOnly}">${icon("heart")}<span>저장</span></button>
+          <label class="vendor-sort">${icon("arrow-up-down")}<select data-action="vendor-sort" aria-label="업체 정렬"><option value="recent" ${state.vendorSort === "recent" ? "selected" : ""}>최근 수정순</option><option value="favorite" ${state.vendorSort === "favorite" ? "selected" : ""}>저장 우선</option><option value="name" ${state.vendorSort === "name" ? "selected" : ""}>이름순</option></select></label>
+        </div>
       </div>
-      <div class="vendor-results"><strong data-vendor-result-count>${filteredVendors().length}</strong><span>개의 레퍼런스</span></div>
-      <div class="vendor-feed">${renderVendorFeed()}</div>
+      <div class="vendor-feed ${filteredVendors().length <= 3 ? "sparse" : ""}">${renderVendorFeed()}</div>
     </section>
   `;
 }
@@ -1009,32 +1166,40 @@ function renderVendorFeed() {
 
 function renderVendorCard(vendor) {
   const category = categoryFor(vendor.categoryId);
-  const photoCount = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id)).length;
+  const photoCount = vendorPhotoSources(vendor).length;
   const assignmentCount = state.vendorSelections.filter((selection) => selection.vendorId === vendor.id).length;
+  const currentSelection = state.currentWeddingId ? selectionFor(state.currentWeddingId, vendor.id) : null;
+  const mediaStatus = state.currentWeddingId
+    ? currentSelection ? `${currentSelection.status} · 배정됨` : "현재 커플 미배정"
+    : assignmentCount ? `${assignmentCount}커플 배정` : "공용 자료";
+  const assignmentLabel = currentSelection ? "배정됨 · 변경" : state.currentWeddingId ? "현재 커플에 추가" : "커플에 추가";
   return `
     <article class="vendor-card" style="--category-color:${safeColor(category.color)}">
       <div class="vendor-media-wrap">
         <button class="vendor-media" type="button" data-action="open-vendor" data-vendor="${vendor.id}" aria-label="${escapeHtml(vendor.name)} 상세 보기">
           ${renderVendorMedia(vendor)}
         </button>
-        <span class="vendor-status">${assignmentCount ? `${assignmentCount}커플 제안` : "공용 자료"}</span>
+        <span class="vendor-status ${currentSelection ? "assigned" : ""}">${escapeHtml(mediaStatus)}</span>
         ${photoCount ? `<span class="photo-count">${icon("images")} ${photoCount}</span>` : ""}
         <button class="favorite-button ${vendor.favorite ? "active" : ""}" type="button" data-action="toggle-favorite" data-vendor="${vendor.id}" aria-label="즐겨찾기" title="즐겨찾기">${icon("heart")}</button>
       </div>
-      <button class="vendor-card-copy" type="button" data-action="open-vendor" data-vendor="${vendor.id}">
-        <span class="vendor-card-meta"><span>${escapeHtml(category.name)}</span>${vendor.sample ? `<em>샘플</em>` : ""}</span>
-        <strong>${escapeHtml(vendor.name)}</strong>
-        <small>${escapeHtml(vendor.price || "가격 정보 없음")}</small>
-      </button>
+      <div class="vendor-card-copy">
+        <button class="vendor-card-open" type="button" data-action="open-vendor" data-vendor="${vendor.id}">
+          <span class="vendor-card-meta"><span>${escapeHtml(category.name)}</span>${vendor.sample ? `<em>샘플</em>` : ""}</span>
+          <strong>${escapeHtml(vendor.name)}</strong>
+          <small>${escapeHtml(vendor.price || "가격 정보 없음")}</small>
+        </button>
+        <button class="vendor-assign-action ${currentSelection ? "assigned" : ""}" type="button" data-action="assign-vendor" data-vendor="${vendor.id}" aria-label="${escapeHtml(vendor.name)} ${escapeHtml(assignmentLabel)}">${icon(currentSelection ? "circle-check" : "user-round-plus")}<span>${escapeHtml(assignmentLabel)}</span></button>
+      </div>
     </article>
   `;
 }
 
 function renderVendorMedia(vendor, extraClass = "") {
-  const photoId = (vendor.photoIds || []).find((id) => state.photoUrls.has(id));
+  const source = vendorPhotoSources(vendor)[0];
   const category = categoryFor(vendor.categoryId);
-  if (photoId) {
-    return `<img class="vendor-photo ${extraClass}" src="${state.photoUrls.get(photoId)}" alt="${escapeHtml(vendor.name)} 샘플" />`;
+  if (source) {
+    return `<img class="vendor-photo ${extraClass}" src="${source}" alt="${escapeHtml(vendor.name)} 레퍼런스" />`;
   }
   return `
     <span class="vendor-placeholder ${extraClass}" style="--category-color:${safeColor(category.color)}">
@@ -1114,33 +1279,39 @@ function renderVendorDetail() {
   const vendor = vendorFor(state.selectedVendorId);
   if (!vendor) return "";
   const category = categoryFor(vendor.categoryId);
-  const photoIds = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id));
-  const index = Math.min(state.selectedVendorPhotoIndex, Math.max(photoIds.length - 1, 0));
-  const photoId = photoIds[index];
+  const photos = vendorPhotoSources(vendor);
+  const index = Math.min(state.selectedVendorPhotoIndex, Math.max(photos.length - 1, 0));
+  const currentSelection = state.currentWeddingId ? selectionFor(state.currentWeddingId, vendor.id) : null;
+  const assignmentLabel = currentSelection ? "배정 정보 변경" : state.currentWeddingId ? "현재 커플에 배정" : "커플 선택해 배정";
   const website = safeUrl(vendor.website);
   return `
     <div class="modal-backdrop" data-action="close-vendor-detail"></div>
     <section class="modal-sheet vendor-detail" role="dialog" aria-modal="true" aria-label="업체 상세">
       <header class="modal-header">
-        <div><span class="modal-kicker">${escapeHtml(category.name)}</span><strong>${escapeHtml(vendor.name)}</strong></div>
+        <div><span class="modal-kicker">Vendor Library</span><strong>${escapeHtml(category.name)} 레퍼런스</strong></div>
         <button class="icon-button" type="button" data-action="close-vendor-detail" aria-label="닫기" title="닫기">${icon("x")}</button>
       </header>
       <div class="detail-scroll">
         <div class="detail-gallery ${state.vendorDetailTab === "overview" ? "" : "compact"}" style="--category-color:${safeColor(category.color)}">
           <div class="detail-main-photo">
-            ${photoId ? `<img src="${state.photoUrls.get(photoId)}" alt="${escapeHtml(vendor.name)} 사진 ${index + 1}" />` : renderVendorMedia(vendor, "detail-placeholder")}
-            ${photoIds.length > 1 ? `
+            ${photos.length ? `<img src="${photos[index]}" alt="${escapeHtml(vendor.name)} 사진 ${index + 1}" />` : renderVendorMedia(vendor, "detail-placeholder")}
+            ${photos.length > 1 ? `
               <button class="gallery-arrow prev" type="button" data-action="vendor-photo-prev" aria-label="이전 사진">${icon("chevron-left")}</button>
               <button class="gallery-arrow next" type="button" data-action="vendor-photo-next" aria-label="다음 사진">${icon("chevron-right")}</button>
-              <span class="gallery-count">${index + 1} / ${photoIds.length}</span>
+              <span class="gallery-count">${index + 1} / ${photos.length}</span>
             ` : ""}
           </div>
-          ${photoIds.length > 1 ? `<div class="thumbnail-strip">${photoIds.map((id, photoIndex) => `<button class="${photoIndex === index ? "active" : ""}" type="button" data-action="select-vendor-photo" data-index="${photoIndex}"><img src="${state.photoUrls.get(id)}" alt="" /></button>`).join("")}</div>` : ""}
+          ${photos.length > 1 ? `<div class="thumbnail-strip">${photos.map((source, photoIndex) => `<button class="${photoIndex === index ? "active" : ""}" type="button" data-action="select-vendor-photo" data-index="${photoIndex}"><img src="${source}" alt="" /></button>`).join("")}</div>` : ""}
         </div>
         <div class="detail-content">
           <div class="detail-title-row">
-            <div><span class="status-tag">${escapeHtml(vendor.status || "관심")}</span><h2>${escapeHtml(vendor.name)}</h2></div>
+            <div><span class="status-tag">${escapeHtml(vendor.status || "관심")}</span><h2>${escapeHtml(vendor.name)}</h2>${currentSelection ? `<span class="assignment-chip">${icon("circle-check")} ${escapeHtml(weddingName(state.wedding))} · ${escapeHtml(currentSelection.status)}</span>` : ""}</div>
             <button class="favorite-button detail-favorite ${vendor.favorite ? "active" : ""}" type="button" data-action="toggle-favorite" data-vendor="${vendor.id}" aria-label="즐겨찾기">${icon("heart")}</button>
+          </div>
+          <div class="detail-quick-facts">
+            <div class="price-fact"><small>대표 금액</small><strong>${escapeHtml(presentationPrice(vendor, currentSelection))}</strong></div>
+            <div><small>상품 구성</small><strong>${(vendor.packages || []).length}개</strong></div>
+            <div><small>사전 미팅</small><strong>${vendor.requiredMeeting ? "필수" : "선택"}</strong></div>
           </div>
           <div class="detail-tabs" role="tablist" aria-label="업체 정보 구분">
             ${[
@@ -1153,11 +1324,11 @@ function renderVendorDetail() {
           ${renderVendorDetailPanel(vendor, website)}
         </div>
       </div>
-      <footer class="modal-actions">
-        <button class="secondary danger-text" type="button" data-action="delete-vendor" data-vendor="${vendor.id}" aria-label="업체 삭제">${icon("trash-2")}</button>
-        <button class="secondary" type="button" data-action="edit-vendor" data-vendor="${vendor.id}">${icon("pencil")} 편집</button>
-        <button class="secondary" type="button" data-action="assign-vendor" data-vendor="${vendor.id}">${icon("user-round-plus")} 커플에 추가</button>
-        <button class="primary grow" type="button" data-action="open-presentation" data-vendor="${vendor.id}">${icon("monitor-up")} 고객에게 보여주기</button>
+      <footer class="modal-actions vendor-detail-actions">
+        <button class="secondary danger-text detail-icon-action" type="button" data-action="delete-vendor" data-vendor="${vendor.id}" aria-label="업체 삭제" title="업체 삭제">${icon("trash-2")}</button>
+        <button class="secondary detail-icon-action" type="button" data-action="edit-vendor" data-vendor="${vendor.id}" aria-label="업체 편집" title="업체 편집">${icon("pencil")}</button>
+        <button class="secondary assign-detail-action ${currentSelection ? "assigned" : ""}" type="button" data-action="assign-vendor" data-vendor="${vendor.id}">${icon(currentSelection ? "circle-check" : "user-round-plus")} ${escapeHtml(assignmentLabel)}</button>
+        <button class="primary presentation-action" type="button" data-action="open-presentation" data-vendor="${vendor.id}">${icon("monitor-up")} 고객 보기</button>
       </footer>
     </section>
   `;
@@ -1288,26 +1459,57 @@ function renderCategoryManager() {
   `;
 }
 
+function renderPresentationPreview() {
+  const vendor = vendorFor(state.presentationPreviewVendorId);
+  if (!vendor) return "";
+  const category = categoryFor(vendor.categoryId);
+  const selection = state.currentWeddingId ? selectionFor(state.currentWeddingId, vendor.id) : null;
+  return `
+    <div class="modal-backdrop" data-action="close-presentation-preview"></div>
+    <section class="modal-sheet compact-modal presentation-preview" role="dialog" aria-modal="true" aria-label="고객 보기 설정">
+      <header class="modal-header"><div><span class="modal-kicker">Customer View</span><strong>고객 보기 설정</strong></div><button class="icon-button" type="button" data-action="close-presentation-preview" aria-label="닫기">${icon("x")}</button></header>
+      <div class="presentation-preview-body">
+        <div class="presentation-preview-vendor" style="--category-color:${safeColor(category.color)}">
+          <div>${renderVendorMedia(vendor)}</div>
+          <span><small>${escapeHtml(category.name)}</small><strong>${escapeHtml(vendor.name)}</strong></span>
+        </div>
+        <div class="presentation-options" aria-label="고객에게 표시할 정보">
+          <label><input data-action="presentation-show-price" type="checkbox" ${state.presentationShowPrice ? "checked" : ""} /><span>${icon("wallet-cards")}<strong>금액 표시</strong></span></label>
+          <label><input data-action="presentation-show-terms" type="checkbox" ${state.presentationShowTerms ? "checked" : ""} /><span>${icon("file-check-2")}<strong>계약 조건 표시</strong></span></label>
+        </div>
+        <div class="presentation-preview-data">
+          ${state.presentationShowPrice ? `<div><small>고객 안내 금액</small><strong>${escapeHtml(presentationPrice(vendor, selection))}</strong></div>` : ""}
+          ${state.presentationShowTerms ? `<p>${escapeHtml(presentationTerms(vendor, selection))}</p>` : ""}
+        </div>
+      </div>
+      <footer class="modal-actions"><button class="secondary" type="button" data-action="close-presentation-preview">취소</button><button class="primary grow" type="button" data-action="start-presentation" data-vendor="${vendor.id}">${icon("monitor-up")} 전체 화면 시작</button></footer>
+    </section>
+  `;
+}
+
 function renderPresentation() {
   const vendor = vendorFor(state.presentationVendorId);
   if (!vendor) return "";
   const category = categoryFor(vendor.categoryId);
   const selection = state.currentWeddingId ? selectionFor(state.currentWeddingId, vendor.id) : null;
-  const photos = (vendor.photoIds || []).filter((id) => state.photoUrls.has(id));
+  const photos = vendorPhotoSources(vendor);
   const index = Math.min(state.presentationPhotoIndex, Math.max(photos.length - 1, 0));
   return `
     <section class="presentation" role="dialog" aria-modal="true" aria-label="고객 프레젠테이션">
       <header class="presentation-header">
         <div><span>${escapeHtml(category.name)}</span><strong>${escapeHtml(vendor.name)}</strong></div>
-        <button class="presentation-close" type="button" data-action="close-presentation" aria-label="닫기">${icon("x")}</button>
+        <button class="presentation-close" type="button" data-action="close-presentation" aria-label="고객 보기 종료" title="고객 보기 종료">${icon("x")}</button>
       </header>
       <div class="presentation-stage" style="--category-color:${safeColor(category.color)}">
-        ${photos.length ? `<img src="${state.photoUrls.get(photos[index])}" alt="${escapeHtml(vendor.name)} 레퍼런스 ${index + 1}" />` : renderVendorMedia(vendor, "presentation-placeholder")}
+        ${photos.length ? `<img src="${photos[index]}" alt="${escapeHtml(vendor.name)} 레퍼런스 ${index + 1}" />` : renderVendorMedia(vendor, "presentation-placeholder")}
         ${photos.length > 1 ? `<button class="presentation-arrow prev" type="button" data-action="presentation-prev" aria-label="이전 사진">${icon("chevron-left")}</button><button class="presentation-arrow next" type="button" data-action="presentation-next" aria-label="다음 사진">${icon("chevron-right")}</button>` : ""}
       </div>
       <footer class="presentation-footer">
-        <div><strong>${escapeHtml(selection?.quotedPrice || vendor.price || "가격 협의")}</strong><span>${escapeHtml(selection?.contractTerms || vendor.description || vendor.contractTerms || "")}</span></div>
-        <span>${photos.length ? `${index + 1} / ${photos.length}` : "사진 준비 중"}</span>
+        <div class="presentation-summary">
+          ${state.presentationShowPrice ? `<div class="presentation-price"><small>안내 금액</small><strong>${escapeHtml(presentationPrice(vendor, selection))}</strong></div>` : ""}
+          ${state.presentationShowTerms ? `<div class="presentation-terms"><small>계약 조건</small><p>${escapeHtml(presentationTerms(vendor, selection))}</p></div>` : ""}
+        </div>
+        <span class="presentation-counter">${photos.length ? `${index + 1} / ${photos.length}` : "사진 준비 중"}</span>
       </footer>
     </section>
   `;
@@ -1325,10 +1527,17 @@ function renderManageView() {
         <div><div class="eyebrow">Back Office</div><h1>${state.wedding ? escapeHtml(weddingName(state.wedding)) : "플래너 설정"}</h1><p>${state.wedding ? "선택한 웨딩의 기본 정보와 계정, 제안 업체를 관리합니다." : "모든 웨딩과 공용 레퍼런스가 실시간으로 동기화됩니다."}</p></div>
       </header>
       <div class="stat-strip">
-        <div><strong>${state.weddings.filter((wedding) => wedding.status === "active").length}</strong><span>진행 웨딩</span></div>
-        <div><strong>${state.vendors.length}</strong><span>업체</span></div>
-        <div><strong>${state.photoRecords.size}</strong><span>사진</span></div>
-        <div><strong>${state.aggregateDayNotes.length}</strong><span>일정</span></div>
+        ${state.wedding ? `
+          <div><strong>${escapeHtml(daysToWedding())}</strong><span>예식일</span></div>
+          <div><strong>${state.dayNotes.size}</strong><span>일정</span></div>
+          <div><strong>${assigned.length}</strong><span>제안 업체</span></div>
+          <div><strong>${state.members.length}/2</strong><span>계정</span></div>
+        ` : `
+          <div><strong>${state.weddings.filter((wedding) => wedding.status === "active").length}</strong><span>진행 웨딩</span></div>
+          <div><strong>${state.vendors.length}</strong><span>업체</span></div>
+          <div><strong>${state.photoRecords.size}</strong><span>사진</span></div>
+          <div><strong>${state.aggregateDayNotes.length}</strong><span>일정</span></div>
+        `}
       </div>
       ${state.wedding ? `<section class="manage-section">
         <div class="section-title-row"><div><div class="eyebrow">Wedding Profile</div><h2>웨딩 기본 정보</h2></div></div>
@@ -1360,7 +1569,7 @@ function renderManageView() {
         }).join("") : `<div class="empty-inline">${icon("briefcase-business")}<span>이 커플에 제안한 업체가 없습니다.</span></div>`}</div>
         ${readonly ? "" : `<div class="form-submit-row"><button class="secondary" type="button" data-action="navigate" data-view="vendors">${icon("images")} 공용 자료실에서 추가</button></div>`}
       </section>` : `<section class="manage-section context-empty"><div>${icon("mouse-pointer-click")}<strong>커플을 선택하면 상세 설정을 관리할 수 있습니다.</strong><p>커플 목록 또는 상단 선택기에서 웨딩을 선택하세요.</p></div><button class="secondary" type="button" data-action="navigate" data-view="couples">커플 목록</button></section>`}
-      <section class="manage-section">
+      ${!state.wedding ? `<section class="manage-section">
         <div class="section-title-row"><div><div class="eyebrow">Security</div><h2>내 비밀번호</h2></div></div>
         <form class="inline-form" data-action="change-password"><label>새 비밀번호<input name="password" type="password" minlength="6" required /></label><button class="secondary" type="submit">변경</button></form>
       </section>
@@ -1368,7 +1577,7 @@ function renderManageView() {
         <div class="section-title-row"><div><div class="eyebrow">Data</div><h2>데이터 백업</h2></div>${icon("database")}</div>
         <p>모든 웨딩, 일정, 공용 업체, 커플별 제안 정보와 사진을 하나의 파일로 보관합니다. 계정 비밀번호는 포함되지 않습니다.</p>
         <div class="data-actions"><button class="secondary" type="button" data-action="export-data">${icon("download")} 전체 백업</button><button class="secondary" type="button" data-action="import-data">${icon("upload")} 백업 복원</button><input class="visually-hidden" type="file" accept="application/json" data-action="data-import-file" /></div>
-      </section>
+      </section>` : ""}
     </section>
   `;
 }
@@ -1376,10 +1585,15 @@ function renderManageView() {
 function renderSelectionEditor() {
   const vendor = vendorFor(state.selectionEditor.vendorId);
   if (!vendor) return "";
-  const activeWeddings = state.weddings.filter((wedding) => wedding.status === "active");
-  const weddingId = state.selectionEditor.weddingId || state.currentWeddingId || activeWeddings[0]?.id;
+  const requestedWeddingId = state.selectionEditor.weddingId || state.currentWeddingId;
+  const preferredWeddingId = state.weddings.some((wedding) => wedding.id === requestedWeddingId && wedding.status === "active") ? requestedWeddingId : null;
+  const activeWeddings = state.weddings
+    .filter((wedding) => wedding.status === "active")
+    .sort((a, b) => Number(b.id === preferredWeddingId) - Number(a.id === preferredWeddingId) || a.weddingDate.localeCompare(b.weddingDate));
+  const weddingId = preferredWeddingId || activeWeddings[0]?.id;
   const selection = selectionFor(weddingId, vendor.id) || {};
-  return `<div class="modal-backdrop" data-action="close-selection-editor"></div><form class="modal-sheet compact-modal" data-action="save-selection" role="dialog" aria-modal="true"><header class="modal-header"><div><span class="modal-kicker">Couple Reference</span><strong>${escapeHtml(vendor.name)}</strong></div><button class="icon-button" type="button" data-action="close-selection-editor">${icon("x")}</button></header><div class="editor-fields"><label>커플<select name="weddingId" required>${activeWeddings.map((wedding) => `<option value="${wedding.id}" ${wedding.id === weddingId ? "selected" : ""}>${escapeHtml(weddingName(wedding))} · ${displayDate(wedding.weddingDate)}</option>`).join("")}</select></label><div class="field-grid two-cols"><label>진행 상태<select name="status">${vendorStatuses.map((status) => `<option ${status === (selection.status || "관심") ? "selected" : ""}>${status}</option>`).join("")}</select></label><label>개별 견적<input name="quotedPrice" value="${escapeHtml(selection.quotedPrice || "")}" placeholder="공용 가격과 다를 때 입력" /></label></div><label>개별 계약 조건<textarea name="contractTerms" rows="4" placeholder="이 커플에게 적용되는 계약 조건">${escapeHtml(selection.contractTerms || "")}</textarea></label><label>플래너 메모<textarea name="plannerNote" rows="4" placeholder="고객에게 표시되지 않는 내부 메모">${escapeHtml(selection.plannerNote || "")}</textarea></label><input type="hidden" name="vendorId" value="${vendor.id}" /></div><footer class="modal-actions"><button class="secondary" type="button" data-action="close-selection-editor">취소</button><button class="primary grow" type="submit">${icon("save")} 저장</button></footer></form>`;
+  const assigned = Boolean(selectionFor(weddingId, vendor.id));
+  return `<div class="modal-backdrop" data-action="close-selection-editor"></div><form class="modal-sheet compact-modal" data-action="save-selection" role="dialog" aria-modal="true" aria-label="커플별 업체 배정"><header class="modal-header"><div><span class="modal-kicker">Couple Reference</span><strong>${escapeHtml(vendor.name)}</strong></div><button class="icon-button" type="button" data-action="close-selection-editor" aria-label="닫기">${icon("x")}</button></header><div class="editor-fields"><div class="assignment-target-summary">${icon(assigned ? "circle-check" : "user-round-plus")}<span><small>${assigned ? "배정된 커플" : "배정 대상"}</small><strong>${escapeHtml(weddingName(weddingFor(weddingId)))}</strong></span></div><label>커플<select name="weddingId" required>${activeWeddings.map((wedding) => `<option value="${wedding.id}" ${wedding.id === weddingId ? "selected" : ""}>${escapeHtml(weddingName(wedding))} · ${displayDate(wedding.weddingDate)}</option>`).join("")}</select></label><div class="field-grid two-cols"><label>진행 상태<select name="status">${vendorStatuses.map((status) => `<option ${status === (selection.status || "관심") ? "selected" : ""}>${status}</option>`).join("")}</select></label><label>개별 견적<input name="quotedPrice" value="${escapeHtml(selection.quotedPrice || "")}" placeholder="공용 가격과 다를 때 입력" /></label></div><label>개별 계약 조건<textarea name="contractTerms" rows="4" placeholder="이 커플에게 적용되는 계약 조건">${escapeHtml(selection.contractTerms || "")}</textarea></label><label>플래너 메모<textarea name="plannerNote" rows="4" placeholder="고객에게 표시되지 않는 내부 메모">${escapeHtml(selection.plannerNote || "")}</textarea></label><input type="hidden" name="vendorId" value="${vendor.id}" /></div><footer class="modal-actions"><button class="secondary" type="button" data-action="close-selection-editor">취소</button><button class="primary grow" type="submit">${icon(assigned ? "save" : "user-round-plus")} ${assigned ? "배정 정보 저장" : "커플에 배정"}</button></footer></form>`;
 }
 
 function renderDayEditor() {
@@ -1429,7 +1643,7 @@ function renderPrintSheet() {
                 if (!date) return `<span class="print-day"></span>`;
                 const key = dateKey(date);
                 return `<span class="print-day ${key === todayKey ? "today" : ""} ${state.dayNotes.has(key) ? "has-note" : ""}">${date.getDate()}</span>`;
-              }).join("")}</div><div class="print-line">${escapeHtml(state.weekNotes.get(row.key)?.text || "")}</div></div>`).join("")}
+              }).join("")}</div><div class="print-line">${escapeHtml(weekDisplayText(row))}</div></div>`).join("")}
             </div>
           </article>
         `).join("")}
@@ -1844,6 +2058,7 @@ async function handleSaveSelection(form) {
   state.selectionEditor = null;
   await hydrateRemoteState({ id: state.authUser.uid });
   render();
+  restoreModalFocus();
   notify("커플별 업체 정보가 저장되었습니다.");
 }
 
@@ -1876,14 +2091,23 @@ function updateVendorFeed() {
   const feed = document.querySelector(".vendor-feed");
   const count = document.querySelector("[data-vendor-result-count]");
   if (!feed || !count) return;
+  const vendors = filteredVendors();
   feed.innerHTML = renderVendorFeed();
-  count.textContent = filteredVendors().length;
+  feed.classList.toggle("sparse", vendors.length <= 3);
+  count.textContent = vendors.length;
+  activateIcons();
+}
+
+function updateWeddingSwitcherList() {
+  const list = document.querySelector(".context-options");
+  if (!list) return;
+  list.innerHTML = renderWeddingSwitcherRows();
   activateIcons();
 }
 
 function moveVendorPhoto(direction) {
   const vendor = vendorFor(state.selectedVendorId);
-  const count = (vendor?.photoIds || []).filter((id) => state.photoUrls.has(id)).length;
+  const count = vendorPhotoSources(vendor).length;
   if (!count) return;
   state.selectedVendorPhotoIndex = (state.selectedVendorPhotoIndex + direction + count) % count;
   render();
@@ -1891,7 +2115,7 @@ function moveVendorPhoto(direction) {
 
 function movePresentationPhoto(direction) {
   const vendor = vendorFor(state.presentationVendorId);
-  const count = (vendor?.photoIds || []).filter((id) => state.photoUrls.has(id)).length;
+  const count = vendorPhotoSources(vendor).length;
   if (!count) return;
   state.presentationPhotoIndex = (state.presentationPhotoIndex + direction + count) % count;
   render();
@@ -2089,7 +2313,7 @@ function buildPosterSvg() {
   const height = 1700;
   const margin = 54;
   const colWidth = 342;
-  const rowHeight = 300;
+  const rowHeight = 360;
   const todayKey = dateKey(new Date());
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
   svg += `<rect width="100%" height="100%" fill="#ffffff"/>`;
@@ -2105,16 +2329,16 @@ function buildPosterSvg() {
     svg += `<text x="${x}" y="${y}" font-size="26" font-weight="800" font-family="Arial, sans-serif" fill="#171916">${month.getMonth() + 1}</text>`;
     weekdays.forEach((day, dayIndex) => { svg += `<text x="${x + 48 + dayIndex * 25}" y="${y}" text-anchor="middle" font-size="12" font-weight="800" font-family="Arial, sans-serif" fill="#171916">${day}</text>`; });
     getMonthRows(month).forEach((week, weekIndex) => {
-      const cy = y + 28 + weekIndex * 34;
+      const cy = y + 32 + weekIndex * 42;
       week.days.forEach((date, dayIndex) => {
         if (!date) return;
         const cx = x + 48 + dayIndex * 25;
         const key = dateKey(date);
-        if (key === todayKey) svg += `<circle cx="${cx}" cy="${cy - 4}" r="12" fill="#c44958"/>`;
-        svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="13" font-weight="${state.dayNotes.has(key) ? "800" : "500"}" font-family="Arial, sans-serif" fill="${key === todayKey ? "#ffffff" : state.dayNotes.has(key) ? "#167d75" : "#171916"}">${date.getDate()}</text>`;
+        if (key === todayKey) svg += `<circle cx="${cx}" cy="${cy - 4}" r="12" fill="#ffffff" stroke="#c44958" stroke-width="2"/>`;
+        svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="13" font-weight="${key === todayKey || state.dayNotes.has(key) ? "800" : "500"}" font-family="Arial, sans-serif" fill="${key === todayKey ? "#c44958" : state.dayNotes.has(key) ? "#167d75" : "#171916"}">${date.getDate()}</text>`;
       });
       const lineY = cy - 1;
-      const text = state.weekNotes.get(week.key)?.text || "";
+      const text = weekDisplayText(week);
       svg += `<line x1="${x + 218}" y1="${lineY}" x2="${x + colWidth}" y2="${lineY}" stroke="#9da19a" stroke-dasharray="2 4"/>`;
       if (text) svg += `<text x="${x + colWidth - 4}" y="${lineY - 5}" text-anchor="end" font-size="16" font-family="Arial, sans-serif" fill="#171916">${escapeHtml(text)}</text>`;
     });
@@ -2157,7 +2381,10 @@ async function switchWeddingContext(weddingId, view = "calendar") {
   render();
   try {
     await hydrateRemoteState({ id: state.authUser.uid }, { weddingId: weddingId || null });
-    state.activeView = weddingId ? view : "overview";
+    if (weddingId) {
+      state.recentWeddingIds = [weddingId, ...state.recentWeddingIds.filter((id) => id !== weddingId)].slice(0, 5);
+    }
+    state.activeView = weddingId ? view : ["settings", "vendors"].includes(view) ? view : "overview";
     state.selectedDate = null;
     state.aggregateDate = null;
     state.aggregateWeekKey = null;
@@ -2215,8 +2442,17 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "new-wedding") { state.weddingCreatorOpen = true; render(); }
   if (action === "close-wedding-creator") { state.weddingCreatorOpen = false; render(); }
+  if (action === "open-wedding-switcher") { state.weddingSwitcherOpen = true; state.weddingSwitchQuery = ""; render(); }
+  if (action === "close-wedding-switcher") { state.weddingSwitcherOpen = false; render(); }
+  if (action === "switch-wedding") {
+    const targetView = ["settings", "vendors"].includes(state.activeView) ? state.activeView : "calendar";
+    state.weddingSwitcherOpen = false;
+    await switchWeddingContext(target.dataset.wedding, targetView);
+  }
   if (action === "open-wedding") await switchWeddingContext(target.dataset.wedding);
   if (action === "set-couple-status") { state.coupleStatus = target.dataset.status; state.activeView = "couples"; render(); }
+  if (action === "set-couple-filter") { state.coupleQuickFilter = target.dataset.filter; render(); }
+  if (action === "open-operation-filter") { state.coupleStatus = "active"; state.coupleQuickFilter = target.dataset.filter; state.activeView = "couples"; render(); }
   if (action === "open-aggregate-day") { state.aggregateDate = target.dataset.date; state.aggregateWeekKey = null; render(); }
   if (action === "open-aggregate-week") { state.aggregateWeekKey = target.dataset.week; state.aggregateDate = null; render(); }
   if (action === "close-aggregate-list") { state.aggregateDate = null; state.aggregateWeekKey = null; render(); }
@@ -2232,9 +2468,17 @@ document.addEventListener("click", async (event) => {
   if (action === "print") { if (!state.wedding) notify("먼저 커플을 선택하세요."); else { renderPrintSheet(); window.print(); } }
   if (action === "png") await downloadPng();
   if (action === "set-category") { state.selectedCategory = target.dataset.category; render(); }
+  if (action === "toggle-vendor-favorites") { state.vendorFavoriteOnly = !state.vendorFavoriteOnly; render(); }
   if (action === "new-vendor") { state.editingVendorId = "new"; state.selectedVendorId = null; render(); }
-  if (action === "open-vendor") { state.selectedVendorId = target.dataset.vendor; state.selectedVendorPhotoIndex = 0; state.vendorDetailTab = "overview"; render(); }
-  if (action === "close-vendor-detail") { state.selectedVendorId = null; render(); }
+  if (action === "open-vendor") {
+    setModalReturn(`[data-action="open-vendor"][data-vendor="${target.dataset.vendor}"]`);
+    state.selectedVendorId = target.dataset.vendor;
+    state.selectedVendorPhotoIndex = 0;
+    state.vendorDetailTab = "overview";
+    render();
+    focusActiveDialog('[data-action="close-vendor-detail"]');
+  }
+  if (action === "close-vendor-detail") { state.selectedVendorId = null; render(); restoreModalFocus(); }
   if (action === "set-vendor-detail-tab") { state.vendorDetailTab = target.dataset.tab; render(); }
   if (action === "edit-vendor") { state.editingVendorId = target.dataset.vendor; state.selectedVendorId = null; render(); }
   if (action === "close-vendor-editor") { clearPendingPhotoUrls(); state.editingVendorId = null; render(); }
@@ -2254,19 +2498,42 @@ document.addEventListener("click", async (event) => {
   if (action === "delete-vendor") await handleDeleteVendor(target.dataset.vendor);
   if (action === "assign-vendor") {
     if (!state.weddings.some((wedding) => wedding.status === "active")) throw new Error("먼저 진행 중인 웨딩을 등록하세요.");
+    setModalReturn(`[data-action="open-vendor"][data-vendor="${target.dataset.vendor}"]`);
     state.selectionEditor = { vendorId: target.dataset.vendor, weddingId: state.currentWeddingId };
     state.selectedVendorId = null;
     render();
+    focusActiveDialog('select[name="weddingId"]');
   }
-  if (action === "edit-selection") { state.selectionEditor = { vendorId: target.dataset.vendor, weddingId: target.dataset.wedding }; render(); }
-  if (action === "close-selection-editor") { state.selectionEditor = null; render(); }
+  if (action === "edit-selection") {
+    setModalReturn(`[data-action="edit-selection"][data-vendor="${target.dataset.vendor}"][data-wedding="${target.dataset.wedding}"]`);
+    state.selectionEditor = { vendorId: target.dataset.vendor, weddingId: target.dataset.wedding };
+    render();
+    focusActiveDialog('select[name="weddingId"]');
+  }
+  if (action === "close-selection-editor") { state.selectionEditor = null; render(); restoreModalFocus(); }
   if (action === "remove-selection") await handleRemoveSelection(target.dataset.wedding, target.dataset.vendor);
   if (action === "open-category-manager") { state.categoryManagerOpen = true; render(); }
   if (action === "close-category-manager") { state.categoryManagerOpen = false; render(); }
   if (action === "close-issued-account") { state.issuedAccount = null; render(); }
   if (action === "delete-category") await handleDeleteCategory(target.dataset.category);
-  if (action === "open-presentation") { state.presentationVendorId = target.dataset.vendor; state.presentationPhotoIndex = state.selectedVendorPhotoIndex; state.selectedVendorId = null; render(); }
-  if (action === "close-presentation") { state.presentationVendorId = null; render(); }
+  if (action === "open-presentation") {
+    setModalReturn(`[data-action="open-vendor"][data-vendor="${target.dataset.vendor}"]`);
+    state.presentationPreviewVendorId = target.dataset.vendor;
+    state.presentationShowPrice = true;
+    state.presentationShowTerms = true;
+    state.presentationPhotoIndex = state.selectedVendorPhotoIndex;
+    state.selectedVendorId = null;
+    render();
+    focusActiveDialog('[data-action="close-presentation-preview"]');
+  }
+  if (action === "close-presentation-preview") { state.presentationPreviewVendorId = null; render(); restoreModalFocus(); }
+  if (action === "start-presentation") {
+    state.presentationVendorId = target.dataset.vendor;
+    state.presentationPreviewVendorId = null;
+    render();
+    focusActiveDialog('[data-action="close-presentation"]');
+  }
+  if (action === "close-presentation") { state.presentationVendorId = null; render(); restoreModalFocus(); }
   if (action === "presentation-prev") movePresentationPhoto(-1);
   if (action === "presentation-next") movePresentationPhoto(1);
   if (action === "delete-member") await handleDeleteMember(target.dataset.member);
@@ -2289,13 +2556,20 @@ document.addEventListener("input", (event) => {
       card.hidden = Boolean(query) && !card.textContent.toLowerCase().includes(query);
     });
   }
+  if (target?.dataset?.action === "wedding-switch-search") {
+    state.weddingSwitchQuery = target.value;
+    updateWeddingSwitcherList();
+  }
 });
 
 document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
     if (target?.dataset?.action === "vendor-photos") previewSelectedPhotos(target);
-    if (target?.dataset?.action === "wedding-switch") await switchWeddingContext(target.value);
+    if (target?.dataset?.action === "couple-sort") { state.coupleSort = target.value; render(); }
+    if (target?.dataset?.action === "vendor-sort") { state.vendorSort = target.value; render(); }
+    if (target?.dataset?.action === "presentation-show-price") { state.presentationShowPrice = target.checked; render(); focusActiveDialog('[data-action="presentation-show-price"]'); }
+    if (target?.dataset?.action === "presentation-show-terms") { state.presentationShowTerms = target.checked; render(); focusActiveDialog('[data-action="presentation-show-terms"]'); }
     if (target?.dataset?.action === "data-import-file" && target.files?.[0]) await importAllData(target.files[0]);
   } catch (error) {
     alert(error.message || "파일을 처리하지 못했습니다.");
@@ -2303,8 +2577,26 @@ document.addEventListener("change", async (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')];
+  const activeDialog = dialogs.at(-1);
+  if (event.key === "Tab" && activeDialog) {
+    const focusable = [...activeDialog.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter((element) => element.getClientRects().length);
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first && (!activeDialog.contains(document.activeElement) || (event.shiftKey && document.activeElement === first))) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (last && !event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
   if (event.key === "Escape") {
+    event.preventDefault();
     if (state.presentationVendorId) state.presentationVendorId = null;
+    else if (state.presentationPreviewVendorId) state.presentationPreviewVendorId = null;
+    else if (state.weddingSwitcherOpen) state.weddingSwitcherOpen = false;
     else if (state.selectionEditor) state.selectionEditor = null;
     else if (state.weddingCreatorOpen) state.weddingCreatorOpen = false;
     else if (state.aggregateDate || state.aggregateWeekKey) { state.aggregateDate = null; state.aggregateWeekKey = null; }
@@ -2314,6 +2606,7 @@ document.addEventListener("keydown", (event) => {
     else if (state.selectedDate) state.selectedDate = null;
     else return;
     render();
+    restoreModalFocus();
   }
   if (state.presentationVendorId && event.key === "ArrowLeft") movePresentationPhoto(-1);
   if (state.presentationVendorId && event.key === "ArrowRight") movePresentationPhoto(1);
