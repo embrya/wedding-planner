@@ -18,6 +18,49 @@ const sampleVendorImages = {
   "sample-venue": "./assets/vendor-venue-sample.jpg",
   "sample-jewelry": "./assets/vendor-jewelry-sample.jpg"
 };
+const spreadsheetLibraryUrl = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+const spreadsheetLibraryIntegrity = "sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT";
+const importedCategoryPalette = ["#39756c", "#c75a6a", "#5f7094", "#a67b33", "#8a6074", "#3c7f93"];
+const vendorImportColumns = [
+  { key: "name", label: "업체명", aliases: ["업체", "상호명", "vendorname"], required: true },
+  { key: "category", label: "카테고리", aliases: ["분류", "업종", "category"], required: true },
+  { key: "status", label: "진행상태", aliases: ["상태", "status"] },
+  { key: "price", label: "대표가격", aliases: ["기본가격", "가격", "price"] },
+  { key: "description", label: "한줄소개", aliases: ["소개", "설명", "description"] },
+  { key: "contact", label: "연락처", aliases: ["전화번호", "전화", "contact"] },
+  { key: "address", label: "주소", aliases: ["위치", "address"] },
+  { key: "instagram", label: "인스타그램", aliases: ["인스타", "instagram"] },
+  { key: "website", label: "웹사이트", aliases: ["홈페이지", "url", "website"] },
+  { key: "tags", label: "태그", aliases: ["키워드", "tags"] },
+  ...Array.from({ length: 3 }, (_, index) => {
+    const number = index + 1;
+    return [
+      { key: `package${number}Name`, label: `상품${number} 이름` },
+      { key: `package${number}Price`, label: `상품${number} 금액` },
+      { key: `package${number}Details`, label: `상품${number} 포함항목` }
+    ];
+  }).flat(),
+  ...Array.from({ length: 3 }, (_, index) => {
+    const number = index + 1;
+    return [
+      { key: `fee${number}Name`, label: `추가비용${number} 항목` },
+      { key: `fee${number}Price`, label: `추가비용${number} 금액` }
+    ];
+  }).flat(),
+  { key: "discountBenefits", label: "할인혜택", aliases: ["할인", "혜택"] },
+  { key: "promotionPeriod", label: "프로모션기간", aliases: ["프로모션"] },
+  { key: "updatedAtLabel", label: "정보업데이트일", aliases: ["업데이트일", "확인일"] },
+  { key: "requiredMeeting", label: "사전미팅필수", aliases: ["미팅필수"] },
+  { key: "scheduleInfo", label: "일정진행안내", aliases: ["일정안내", "진행안내"] },
+  { key: "reservationPolicy", label: "예약조건", aliases: ["예약정책"] },
+  { key: "operationPolicy", label: "변경취소운영정책", aliases: ["변경취소정책", "운영정책"] },
+  { key: "contractTerms", label: "계약조건", aliases: ["계약정책"] },
+  { key: "commissionRate", label: "수수료율", aliases: ["수수료"] },
+  { key: "commissionTerms", label: "정산조건", aliases: ["정산"] },
+  { key: "sourceMemo", label: "자료출처상담기록", aliases: ["자료출처", "상담기록"] },
+  { key: "plannerNotes", label: "플래너메모", aliases: ["내부메모"] },
+  { key: "favorite", label: "즐겨찾기", aliases: ["저장", "favorite"] }
+];
 
 function freshState() {
   return {
@@ -56,6 +99,9 @@ function freshState() {
     selectedVendorPhotoIndex: 0,
     vendorDetailTab: "overview",
     editingVendorId: null,
+    vendorImportOpen: false,
+    vendorImportPreview: null,
+    vendorImportBusy: false,
     categoryManagerOpen: false,
     weddingCreatorOpen: false,
     selectionEditor: null,
@@ -74,6 +120,7 @@ function freshState() {
 let state = freshState();
 let weekTimer;
 let modalReturnSelector = "";
+let spreadsheetLibraryPromise;
 
 function icon(name, className = "") {
   return `<i data-lucide="${name}" class="${className}" aria-hidden="true"></i>`;
@@ -109,6 +156,249 @@ function safeUrl(value) {
 
 function textLines(value) {
   return String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+function ensureSpreadsheetLibrary() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!spreadsheetLibraryPromise) {
+    spreadsheetLibraryPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = spreadsheetLibraryUrl;
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.integrity = spreadsheetLibraryIntegrity;
+      script.onload = () => window.XLSX ? resolve(window.XLSX) : reject(new Error("엑셀 모듈을 초기화하지 못했습니다."));
+      script.onerror = () => reject(new Error("엑셀 모듈을 불러오지 못했습니다. 네트워크를 확인하세요."));
+      document.head.append(script);
+    }).catch((error) => {
+      spreadsheetLibraryPromise = null;
+      throw error;
+    });
+  }
+  return spreadsheetLibraryPromise;
+}
+
+function normalizeSpreadsheetKey(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9가-힣]/gi, "");
+}
+
+function spreadsheetText(value) {
+  return String(value ?? "").trim();
+}
+
+function hasSpreadsheetValue(row, key) {
+  return spreadsheetText(row[key]) !== "";
+}
+
+function parseSpreadsheetBoolean(value) {
+  const normalized = normalizeSpreadsheetKey(value);
+  if (!normalized) return { present: false, value: false, error: "" };
+  if (["y", "yes", "true", "1", "예", "필수", "사용", "o"].includes(normalized)) return { present: true, value: true, error: "" };
+  if (["n", "no", "false", "0", "아니오", "선택", "미사용", "x"].includes(normalized)) return { present: true, value: false, error: "" };
+  return { present: true, value: false, error: "Y 또는 N으로 입력하세요." };
+}
+
+function parseSpreadsheetDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return { present: true, value: dateKey(value), error: "" };
+  const text = spreadsheetText(value);
+  if (!text) return { present: false, value: "", error: "" };
+  const parts = text.match(/\d+/g) || [];
+  if (parts.length !== 3) return { present: true, value: "", error: "YYYY-MM-DD 형식으로 입력하세요." };
+  let year;
+  let month;
+  let day;
+  if (parts[0].length === 4) [year, month, day] = parts.map(Number);
+  else if (parts[2].length === 4) [month, day, year] = parts.map(Number);
+  else if (parts[2].length === 2) {
+    [month, day] = parts.map(Number);
+    year = 2000 + Number(parts[2]);
+  }
+  const date = new Date(year, month - 1, day);
+  if (!year || year < 1900 || !month || !day || date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return { present: true, value: "", error: "유효한 날짜가 아닙니다." };
+  }
+  return { present: true, value: dateKey(date), error: "" };
+}
+
+function vendorImportHeaderLookup() {
+  const lookup = new Map();
+  vendorImportColumns.forEach((column) => {
+    [column.label, column.key, ...(column.aliases || [])].forEach((alias) => lookup.set(normalizeSpreadsheetKey(alias), column.key));
+  });
+  return lookup;
+}
+
+function categoryForImport(value) {
+  const normalized = normalizeSpreadsheetKey(value);
+  return state.categories.find((category) => normalizeSpreadsheetKey(category.name) === normalized || normalizeSpreadsheetKey(category.id) === normalized);
+}
+
+function vendorForImportName(value) {
+  const normalized = normalizeSpreadsheetKey(value);
+  return state.vendors.find((vendor) => normalizeSpreadsheetKey(vendor.name) === normalized);
+}
+
+async function readVendorSpreadsheet(file) {
+  if (!file) throw new Error("업로드할 파일을 선택하세요.");
+  if (!/\.(xlsx|xls|csv)$/i.test(file.name)) throw new Error("XLSX, XLS 또는 CSV 파일만 업로드할 수 있습니다.");
+  if (file.size > 10 * 1024 * 1024) throw new Error("파일은 10MB 이하로 준비하세요.");
+  const XLSX = await ensureSpreadsheetLibrary();
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const sheetName = workbook.SheetNames.find((name) => name.includes("업체 일괄등록")) || workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) throw new Error("읽을 수 있는 시트가 없습니다.");
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "", blankrows: true, dateNF: "yyyy-mm-dd" });
+  const lookup = vendorImportHeaderLookup();
+  const requiredKeys = vendorImportColumns.filter((column) => column.required).map((column) => column.key);
+  const headerIndex = matrix.slice(0, 10).findIndex((row) => {
+    const keys = new Set((row || []).map((value) => lookup.get(normalizeSpreadsheetKey(value))).filter(Boolean));
+    return requiredKeys.every((key) => keys.has(key));
+  });
+  if (headerIndex < 0) throw new Error("첫 10행 안에 업체명과 카테고리 열이 필요합니다.");
+  const mappedHeaders = matrix[headerIndex].map((value) => lookup.get(normalizeSpreadsheetKey(value)) || "");
+  const duplicateHeaders = mappedHeaders.filter((key, index) => key && mappedHeaders.indexOf(key) !== index);
+  if (duplicateHeaders.length) throw new Error("같은 의미의 열이 중복되어 있습니다.");
+  const rows = matrix.slice(headerIndex + 1).map((values, index) => {
+    const cells = Array.isArray(values) ? values : [];
+    const row = { rowNumber: headerIndex + index + 2 };
+    mappedHeaders.forEach((key, columnIndex) => { if (key) row[key] = cells[columnIndex]; });
+    return row;
+  }).filter((row) => Object.entries(row).some(([key, value]) => key !== "rowNumber" && spreadsheetText(value)));
+  if (!rows.length) throw new Error("등록할 업체 행이 없습니다.");
+  if (rows.length > 2000) throw new Error("한 번에 최대 2,000개 업체까지 등록할 수 있습니다.");
+  return { sheetName, rows };
+}
+
+function buildVendorImportPreview(fileName, sheetName, sourceRows) {
+  const nameCounts = new Map();
+  sourceRows.forEach((row) => {
+    const key = normalizeSpreadsheetKey(row.name);
+    if (key) nameCounts.set(key, (nameCounts.get(key) || 0) + 1);
+  });
+  const simpleFields = [
+    "price", "description", "contact", "address", "instagram", "website", "discountBenefits", "promotionPeriod",
+    "scheduleInfo", "reservationPolicy", "operationPolicy", "contractTerms", "commissionRate", "commissionTerms", "sourceMemo", "plannerNotes"
+  ];
+  const rows = sourceRows.map((source) => {
+    const errors = [];
+    const name = spreadsheetText(source.name);
+    const categoryInput = spreadsheetText(source.category);
+    if (!name) errors.push("업체명이 없습니다.");
+    if (!categoryInput) errors.push("카테고리가 없습니다.");
+    if (name && nameCounts.get(normalizeSpreadsheetKey(name)) > 1) errors.push("파일 안에 같은 업체명이 중복되었습니다.");
+    const existing = name ? vendorForImportName(name) : null;
+    const category = categoryInput ? categoryForImport(categoryInput) : null;
+    const patch = {};
+    simpleFields.forEach((key) => { if (hasSpreadsheetValue(source, key)) patch[key] = spreadsheetText(source[key]); });
+    if (patch.website && !safeUrl(patch.website)) errors.push("웹사이트 주소가 올바르지 않습니다.");
+    if (hasSpreadsheetValue(source, "status")) {
+      const status = spreadsheetText(source.status);
+      if (!vendorStatuses.includes(status)) errors.push(`진행상태는 ${vendorStatuses.join(", ")} 중 하나여야 합니다.`);
+      else patch.status = status;
+    }
+    if (hasSpreadsheetValue(source, "tags")) patch.tags = spreadsheetText(source.tags).split(/[,;\n]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 12);
+    const updatedDate = parseSpreadsheetDate(source.updatedAtLabel);
+    if (updatedDate.error) errors.push(`정보업데이트일: ${updatedDate.error}`);
+    else if (updatedDate.present) patch.updatedAtLabel = updatedDate.value;
+    [["requiredMeeting", "사전미팅필수"], ["favorite", "즐겨찾기"]].forEach(([key, label]) => {
+      const parsed = parseSpreadsheetBoolean(source[key]);
+      if (parsed.error) errors.push(`${label}: ${parsed.error}`);
+      else if (parsed.present) patch[key] = parsed.value;
+    });
+    const packages = [];
+    let packagesTouched = false;
+    for (let index = 1; index <= 3; index += 1) {
+      const values = {
+        name: spreadsheetText(source[`package${index}Name`]),
+        price: spreadsheetText(source[`package${index}Price`]),
+        details: spreadsheetText(source[`package${index}Details`])
+      };
+      if (Object.values(values).some(Boolean)) {
+        packagesTouched = true;
+        packages.push({ ...values, name: values.name || `상품 ${index}` });
+      }
+    }
+    if (packagesTouched) patch.packages = packages;
+    const extraFees = [];
+    let feesTouched = false;
+    for (let index = 1; index <= 3; index += 1) {
+      const values = { name: spreadsheetText(source[`fee${index}Name`]), price: spreadsheetText(source[`fee${index}Price`]) };
+      if (Object.values(values).some(Boolean)) {
+        feesTouched = true;
+        extraFees.push({ ...values, name: values.name || `추가 비용 ${index}` });
+      }
+    }
+    if (feesTouched) patch.extraFees = extraFees;
+    return {
+      rowNumber: source.rowNumber,
+      name,
+      categoryInput,
+      categoryId: category?.id || "",
+      categoryName: category?.name || categoryInput,
+      newCategory: Boolean(categoryInput && !category),
+      mode: existing ? "update" : "new",
+      existingId: existing?.id || "",
+      patch,
+      errors
+    };
+  });
+  const validRows = rows.filter((row) => !row.errors.length);
+  return {
+    fileName,
+    sheetName,
+    rows,
+    validCount: validRows.length,
+    invalidCount: rows.length - validRows.length,
+    newCount: validRows.filter((row) => row.mode === "new").length,
+    updateCount: validRows.filter((row) => row.mode === "update").length,
+    newCategories: [...new Set(validRows.filter((row) => row.newCategory).map((row) => row.categoryName))]
+  };
+}
+
+async function handleVendorSpreadsheet(file) {
+  state.vendorImportBusy = true;
+  state.vendorImportPreview = null;
+  render();
+  try {
+    const { sheetName, rows } = await readVendorSpreadsheet(file);
+    state.vendorImportPreview = buildVendorImportPreview(file.name, sheetName, rows);
+  } finally {
+    state.vendorImportBusy = false;
+    render();
+    focusActiveDialog('[data-action="vendor-import-file"]');
+  }
+}
+
+async function downloadVendorImportTemplate() {
+  const XLSX = await ensureSpreadsheetLibrary();
+  const headers = vendorImportColumns.map((column) => column.label);
+  const workbook = XLSX.utils.book_new();
+  const inputSheet = XLSX.utils.aoa_to_sheet([headers]);
+  inputSheet["!cols"] = vendorImportColumns.map((column) => ({ wch: column.key.includes("Details") || ["description", "contractTerms", "plannerNotes", "sourceMemo"].includes(column.key) ? 28 : Math.max(12, column.label.length + 4) }));
+  inputSheet["!autofilter"] = { ref: `A1:${XLSX.utils.encode_col(headers.length - 1)}1` };
+  XLSX.utils.book_append_sheet(workbook, inputSheet, "업체 일괄등록");
+  const example = {
+    name: "라온 가든홀", category: "웨딩홀", status: "견적 받음", price: "식대 9만원 · 대관 600만원",
+    description: "채광이 좋은 단독홀", contact: "02-0000-0000", address: "서울 강남구", instagram: "@sample",
+    tags: "단독홀, 채광, 250명", package1Name: "토요일 점심", package1Price: "식대 9만원", package1Details: "보증 250명\n기본 꽃장식 포함",
+    fee1Name: "생화 업그레이드", fee1Price: "별도 견적", requiredMeeting: "Y", favorite: "N", updatedAtLabel: dateKey(new Date())
+  };
+  const exampleSheet = XLSX.utils.aoa_to_sheet([headers, vendorImportColumns.map((column) => example[column.key] || "")]);
+  exampleSheet["!cols"] = inputSheet["!cols"];
+  XLSX.utils.book_append_sheet(workbook, exampleSheet, "입력 예시");
+  const guideSheet = XLSX.utils.aoa_to_sheet([
+    ["항목", "입력값"],
+    ["필수 열", "업체명, 카테고리"],
+    ["진행상태", vendorStatuses.join(", ")],
+    ["Y/N 열", "사전미팅필수, 즐겨찾기"],
+    ["기존 업체", "같은 업체명은 입력된 셀만 업데이트"],
+    ["새 카테고리", "카테고리명으로 자동 생성"],
+    ["태그", "쉼표로 구분, 최대 12개"],
+    ["사진", "업체 등록 후 레퍼런스 화면에서 추가"]
+  ]);
+  guideSheet["!cols"] = [{ wch: 18 }, { wch: 64 }];
+  XLSX.utils.book_append_sheet(workbook, guideSheet, "코드표");
+  XLSX.writeFile(workbook, "marryday-vendor-import-template.xlsx", { compression: true });
 }
 
 function dateKey(date) {
@@ -791,6 +1081,7 @@ function renderApp() {
       <main class="app-main">${view}</main>
       ${plannerMode() ? renderBottomNav() : ""}
       ${state.selectedDate ? renderDayEditor() : ""}
+      ${state.vendorImportOpen ? renderVendorImport() : ""}
       ${state.selectedVendorId ? renderVendorDetail() : ""}
       ${state.editingVendorId ? renderVendorEditor() : ""}
       ${state.categoryManagerOpen ? renderCategoryManager() : ""}
@@ -1120,7 +1411,7 @@ function renderVendorView() {
           <h1>웨딩 레퍼런스</h1>
           <p>업체 ${state.vendors.length}곳 · 사진 ${photoCount}장</p>
         </div>
-        <button class="primary compact" type="button" data-action="new-vendor">${icon("plus")}<span>업체 등록</span></button>
+        <div class="heading-actions"><button class="secondary compact" type="button" data-action="open-vendor-import">${icon("file-spreadsheet")}<span>엑셀 등록</span></button><button class="primary compact" type="button" data-action="new-vendor">${icon("plus")}<span>업체 등록</span></button></div>
       </header>
       <div class="vendor-filter-bar">
         <div class="vendor-tools">
@@ -1145,6 +1436,45 @@ function renderVendorView() {
         </div>
       </div>
       <div class="vendor-feed ${filteredVendors().length <= 3 ? "sparse" : ""}">${renderVendorFeed()}</div>
+    </section>
+  `;
+}
+
+function renderVendorImport() {
+  const preview = state.vendorImportPreview;
+  const rows = preview?.rows.slice(0, 200) || [];
+  const canImport = Boolean(preview?.validCount && !preview.invalidCount && !state.vendorImportBusy);
+  const submitLabel = state.vendorImportBusy
+    ? `${icon("loader-circle", "spin")} 처리 중`
+    : preview?.invalidCount
+      ? `${icon("triangle-alert")} 오류 ${preview.invalidCount}건`
+      : preview
+        ? `${icon("database")} 신규 ${preview.newCount} · 수정 ${preview.updateCount} 저장`
+        : `${icon("database")} 업체 일괄 저장`;
+  return `
+    <div class="modal-backdrop" data-action="close-vendor-import"></div>
+    <section class="modal-sheet vendor-import" role="dialog" aria-modal="true" aria-label="업체 엑셀 일괄 등록">
+      <header class="modal-header"><div><span class="modal-kicker">Bulk Import</span><strong>업체 엑셀 일괄 등록</strong></div><button class="icon-button" type="button" data-action="close-vendor-import" aria-label="닫기">${icon("x")}</button></header>
+      <div class="vendor-import-body" aria-live="polite">
+        <div class="vendor-import-controls">
+          <button class="secondary" type="button" data-action="download-vendor-template">${icon("file-down")} 엑셀 양식</button>
+          <label class="vendor-import-picker ${state.vendorImportBusy ? "disabled" : ""}">${icon("file-up")}<span><strong>${preview?.fileName ? escapeHtml(preview.fileName) : "엑셀·CSV 파일 선택"}</strong><small>.xlsx · .xls · .csv · 최대 10MB</small></span><input data-action="vendor-import-file" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" ${state.vendorImportBusy ? "disabled" : ""} /></label>
+        </div>
+        ${state.vendorImportBusy ? `<div class="vendor-import-loading">${icon("loader-circle", "spin")}<strong>파일을 처리하고 있습니다</strong></div>` : preview ? `
+          <div class="import-summary">
+            <div><strong>${preview.rows.length}</strong><span>전체 행</span></div>
+            <div><strong>${preview.newCount}</strong><span>신규</span></div>
+            <div><strong>${preview.updateCount}</strong><span>업데이트</span></div>
+            <div class="${preview.invalidCount ? "error" : ""}"><strong>${preview.invalidCount}</strong><span>오류</span></div>
+          </div>
+          ${preview.newCategories.length ? `<div class="import-categories"><span>새 카테고리</span>${preview.newCategories.map((name) => `<em>${icon("folder-plus")}${escapeHtml(name)}</em>`).join("")}</div>` : ""}
+          <div class="import-table-wrap">
+            <table class="import-table"><thead><tr><th>행</th><th>업체</th><th>카테고리</th><th>처리</th></tr></thead><tbody>${rows.map((row) => `<tr class="${row.errors.length ? "invalid" : ""}"><td>${row.rowNumber}</td><td><strong>${escapeHtml(row.name || "업체명 없음")}</strong>${row.errors.length ? `<small>${escapeHtml(row.errors.join(" · "))}</small>` : ""}</td><td>${escapeHtml(row.categoryName || "-")}${row.newCategory && !row.errors.length ? `<small>새로 생성</small>` : ""}</td><td><span class="import-mode ${row.errors.length ? "error" : row.mode}">${row.errors.length ? "오류" : row.mode === "update" ? "업데이트" : "신규"}</span></td></tr>`).join("")}</tbody></table>
+          </div>
+          ${preview.rows.length > rows.length ? `<div class="import-row-limit">외 ${preview.rows.length - rows.length}행</div>` : ""}
+        ` : `<div class="vendor-import-empty">${icon("file-spreadsheet")}<strong>선택한 파일이 없습니다</strong></div>`}
+      </div>
+      <footer class="modal-actions"><button class="secondary" type="button" data-action="close-vendor-import" ${state.vendorImportBusy ? "disabled" : ""}>취소</button><button class="primary grow" type="button" data-action="import-vendors" ${canImport ? "" : "disabled"}>${submitLabel}</button></footer>
     </section>
   `;
 }
@@ -1986,6 +2316,81 @@ async function handleSaveVendor(form) {
   }
 }
 
+async function handleBulkVendorImport() {
+  const preview = state.vendorImportPreview;
+  if (!preview?.validCount) throw new Error("등록할 업체가 없습니다.");
+  if (preview.invalidCount) throw new Error("오류 행을 수정한 뒤 파일을 다시 선택하세요.");
+  state.vendorImportBusy = true;
+  render();
+  try {
+    const plannerId = state.authUser.uid;
+    const legacyWeddingId = state.weddings[0]?.id || null;
+    const categoryMap = new Map(state.categories.map((category) => [normalizeSpreadsheetKey(category.name), category.id]));
+    const newCategoryRows = [];
+    preview.newCategories.forEach((name, index) => {
+      const key = normalizeSpreadsheetKey(name);
+      if (categoryMap.has(key)) return;
+      const id = `category-${crypto.randomUUID()}`;
+      categoryMap.set(key, id);
+      newCategoryRows.push({
+        planner_id: plannerId,
+        wedding_id: legacyWeddingId,
+        id,
+        name,
+        color: importedCategoryPalette[(state.categories.length + index) % importedCategoryPalette.length],
+        icon: "folder",
+        locked: false,
+        sort_order: state.categories.length + index
+      });
+    });
+    if (newCategoryRows.length) throwIfError(await supabase.from("vendor_categories").insert(newCategoryRows));
+    const now = new Date().toISOString();
+    const vendorRows = preview.rows.map((row) => {
+      const existing = row.existingId ? vendorFor(row.existingId) : vendorForImportName(row.name);
+      const categoryId = row.categoryId || categoryMap.get(normalizeSpreadsheetKey(row.categoryName));
+      if (!categoryId) throw new Error(`${row.rowNumber}행 카테고리를 확인할 수 없습니다.`);
+      const base = existing || {
+        status: "관심",
+        favorite: false,
+        requiredMeeting: false,
+        tags: [],
+        packages: [],
+        extraFees: [],
+        photoIds: [],
+        sample: false,
+        updatedAtLabel: dateKey(new Date())
+      };
+      const nextVendor = {
+        ...base,
+        ...row.patch,
+        id: existing?.id || `vendor-${crypto.randomUUID()}`,
+        name: row.name,
+        categoryId,
+        photoIds: existing?.photoIds || [],
+        createdAt: existing?.createdAt || now,
+        updatedAt: now
+      };
+      return vendorRow(nextVendor, plannerId, legacyWeddingId);
+    });
+    for (let index = 0; index < vendorRows.length; index += 100) {
+      throwIfError(await supabase.from("vendors").upsert(vendorRows.slice(index, index + 100), { onConflict: "planner_id,id" }));
+    }
+    state.vendorImportBusy = false;
+    state.vendorImportOpen = false;
+    state.vendorImportPreview = null;
+    await hydrateRemoteState({ id: state.authUser.uid });
+    state.activeView = "vendors";
+    render();
+    restoreModalFocus();
+    notify(`업체 ${vendorRows.length}곳을 일괄 저장했습니다.`);
+  } catch (error) {
+    state.vendorImportBusy = false;
+    await hydrateRemoteState({ id: state.authUser.uid }).catch(() => {});
+    render();
+    throw error;
+  }
+}
+
 async function handleDeleteVendor(vendorId) {
   const vendor = vendorFor(vendorId);
   if (!vendor || !confirm(`${vendor.name} 업체와 등록 사진을 모두 삭제할까요?`)) return;
@@ -2469,6 +2874,21 @@ document.addEventListener("click", async (event) => {
   if (action === "png") await downloadPng();
   if (action === "set-category") { state.selectedCategory = target.dataset.category; render(); }
   if (action === "toggle-vendor-favorites") { state.vendorFavoriteOnly = !state.vendorFavoriteOnly; render(); }
+  if (action === "open-vendor-import") {
+    setModalReturn('[data-action="open-vendor-import"]');
+    state.vendorImportOpen = true;
+    state.vendorImportPreview = null;
+    render();
+    focusActiveDialog('[data-action="vendor-import-file"]');
+  }
+  if (action === "close-vendor-import" && !state.vendorImportBusy) {
+    state.vendorImportOpen = false;
+    state.vendorImportPreview = null;
+    render();
+    restoreModalFocus();
+  }
+  if (action === "download-vendor-template") await downloadVendorImportTemplate();
+  if (action === "import-vendors") await handleBulkVendorImport();
   if (action === "new-vendor") { state.editingVendorId = "new"; state.selectedVendorId = null; render(); }
   if (action === "open-vendor") {
     setModalReturn(`[data-action="open-vendor"][data-vendor="${target.dataset.vendor}"]`);
@@ -2566,6 +2986,7 @@ document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
     if (target?.dataset?.action === "vendor-photos") previewSelectedPhotos(target);
+    if (target?.dataset?.action === "vendor-import-file" && target.files?.[0]) await handleVendorSpreadsheet(target.files[0]);
     if (target?.dataset?.action === "couple-sort") { state.coupleSort = target.value; render(); }
     if (target?.dataset?.action === "vendor-sort") { state.vendorSort = target.value; render(); }
     if (target?.dataset?.action === "presentation-show-price") { state.presentationShowPrice = target.checked; render(); focusActiveDialog('[data-action="presentation-show-price"]'); }
@@ -2596,6 +3017,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (state.presentationVendorId) state.presentationVendorId = null;
     else if (state.presentationPreviewVendorId) state.presentationPreviewVendorId = null;
+    else if (state.vendorImportOpen && !state.vendorImportBusy) { state.vendorImportOpen = false; state.vendorImportPreview = null; }
     else if (state.weddingSwitcherOpen) state.weddingSwitcherOpen = false;
     else if (state.selectionEditor) state.selectionEditor = null;
     else if (state.weddingCreatorOpen) state.weddingCreatorOpen = false;
